@@ -1,0 +1,21 @@
+{
+  "formatVersion": 1,
+  "targetMinecraftVersion": "1.7.10",
+  "scale": 1000,
+  "width": 43008,
+  "height": 21504,
+  "minimumX": -21504,
+  "maximumX": 21503,
+  "minimumZ": -10752,
+  "maximumZ": 10751,
+  "minimumSurfaceY": 1,
+  "maximumSurfaceY": 254,
+  "seaLevel": 62,
+  "projection": "equirectangular",
+  "populationMode": "pregenerated",
+  "caves": false,
+  "ores": false,
+  "lava": false,
+  "structures": false,
+  "vegetation": true
+}

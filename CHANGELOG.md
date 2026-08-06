@@ -16,3 +16,17 @@
 * Documented legacy export controls, inspected layer/terrain compatibility, source
   attribution, offline vegetation limitations, and Phase 2 Anvil scan requirements.
 * Ignored generated WorldPainter projects, exports, and validation reports.
+
+## PR: Repair XenoFactions WorldPainter 2.27.0 pipeline
+
+* Replaced machine-specific source configuration with `scriptDir`-relative file
+  resolution and isolated all generated projects/manifests under `generated/`.
+* Added smoke, preview, and production profiles with resize-aware dimensions,
+  effective-scale manifests, GUI parameters, numeric version checks, and API-only
+  preflight execution.
+* Corrected legacy Anvil `Platform` resolution, river and vegetation filters, all
+  stage reporting, and chunk-aligned partial-region validation.
+* Reworked static validation around parsed filter chains and added mutation tests
+  for invalid map-format, filter, path, profile, and output behavior.
+* Expanded the XenoFactions guide with WorldPainter 2.27.0 commands, known failure
+  causes, output expectations, and the required visual/export checklist.

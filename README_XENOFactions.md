@@ -1,53 +1,107 @@
-# XenoFactions Earth source profile (Phase 1)
+# XenoFactions Earth WorldPainter pipeline
 
-This fork profile turns the upstream Earth sources into a deliberately conservative
-WorldPainter project for **Minecraft Forge 1.7.10**. It prepares terrain, bathymetry,
-water, climate biomes, ice, and offline vegetation before Minecraft sees a chunk.
-It does not modify the separate Xenofactions repository.
+This pipeline generates a conservative **Minecraft Forge 1.7.10** WorldPainter
+project from the repository's Earth sources. `world.js` remains the unchanged
+upstream reference. The supported script is `world_xenofactions.js`.
 
-## Compatibility and sizing
+## Required WorldPainter version
 
-Use a current **WorldPainter 2.x release which still offers the legacy Minecraft
-1.7.10/Anvil export platform**. The script deliberately does not guess a platform
-setter: the installed release must expose that platform in Export World. A first
-small test export is required before the full project is trusted.
+**WorldPainter 2.27.0 is the currently tested API target.** The script calls
+`wp.getVersion()`, rejects versions older than 2.27.0 numerically (including
+2.7.18), and warns for an unverified version. WorldPainter 2.7.18 cannot provide
+the JavaScript `ScriptEngine` expected by this execution path and fails with a
+null-engine `NullPointerException` before the map logic can run.
 
-Supported source scales are `10` (1:4000, 10,752 × 5,376), `20` (1:2000,
-21,504 × 10,752), and `40` (1:1000, **43,008 × 21,504**). Scale 40 is the default.
-All dimensions are multiples of 512, use the upstream equirectangular projection,
-and retain longitude 0 / latitude 0 at the center. With `resize = 100`, expect at
-least the upstream-observed 19.1 GB working set plus headroom; 24–32 GB available
-to WorldPainter is recommended. This estimate varies by WorldPainter/JVM version
-and the enabled vegetation exporters.
+The scripting calls were audited against the `v2.27.0` implementations of
+`ScriptingContext.java`, `CreateFilterOp.java`, `ImportHeightMapOp.java`,
+`GetPlatformOp.java`, `MappingOp.java`, `GetLayerOp.java`, `GetHeightMapOp.java`,
+and `SaveWorldOp.java`. In particular, `withMapFormat` receives the `Platform`
+returned by `getMapFormat().withId(...).go()`, each filter has no more than one
+`onlyOn...` and one `exceptOn...` condition, and all operation builders terminate
+with `go()` at the point required by that API.
 
-## Run the pipeline
+> This development environment did not contain WorldPainter or `wpscript`, so the
+> real 2.27.0 preflight and smoke generation remain owner-run checks. The Python
+> source validator is not represented as a substitute for those runtime checks.
 
-1. Clone the complete repository. Preserve the `images/`, `layer/`, and `terrain/`
-   trees beside the script.
-2. Edit `path` at the top of `world_xenofactions.js`. Use `/`, and include the
-   trailing slash, for example `C:/WorldPainter/Script/`.
-3. Leave the target at `1.7.10`; select scale `10`, `20`, or `40`. Keep the default
-   terrain-surface range `1..254` and sea level 62. The script selects the legacy
-   `org.pepsoft.anvil` map format and fails clearly if the installed WorldPainter
-   does not provide it.
-4. Run the source check: `python3 tools/validate_xenoearth_source.py .`.
-5. In WorldPainter choose **Tools → Run Script…**, select
-   `world_xenofactions.js`, and run it. Do not use `world.js` for XenoFactions;
-   that file is retained only as the upstream reference.
-6. Scale 40 writes `earth_1-1000_xenofactions_1.7.10.world` and regenerates
-   `xenoearth-profile.json` from the active configuration. Other scales receive
-   the corresponding denominator; resized projects include a resize suffix.
+## Profiles and outputs
 
-The script reads image headers before world creation, maps the full 16-bit source
-range to y=1..254, and creates an Anvil project with build limits 0 through 255
-(API upper limit 256) and water at the configured `seaLevel`. This reserves y=0
-for the exported bedrock floor and never places a terrain surface at y=0 or y=255.
-It releases large maps after their final use and loads each used external layer
-once. Long section/rule loops call `wp.checkForInterrupt()`, allowing clean user
-cancellation. `vegetationSeed` records the intended deterministic seed.
-The inspected scripting surface provides no verified per-layer seed setter, so the
-script does not invent one; deterministic export behavior must be confirmed in the
-chosen WorldPainter release.
+The Run Script dialog exposes `profile` and `preflightOnly`; users do not edit the
+source. The default is deliberately the small `smoke` profile.
+
+| Profile | Source | Resize | Effective scale | Output dimensions | Project |
+|---|---:|---:|---:|---:|---|
+| `smoke` (default) | 10 | 25% | 1:16000 | 2,688 × 1,344 | `generated/earth_1-16000_xenofactions_1.7.10_smoke.world` |
+| `preview` | 10 | 100% | 1:4000 | 10,752 × 5,376 | `generated/earth_1-4000_xenofactions_1.7.10_preview.world` |
+| `production` | 40 | 100% | 1:1000 | 43,008 × 21,504 | `generated/earth_1-1000_xenofactions_1.7.10_production.world` |
+
+Each run writes `generated/xenoearth-profile-<profile>.json`. The tracked root
+`xenoearth-profile.json` is the production source contract and is never
+regenerated. Partial edge region files are valid: dimensions need only be positive
+whole blocks aligned to 16-block chunks, not 512-block regions.
+
+The script uses WorldPainter's `scriptDir` binding and safe Java `File` children,
+so it automatically locates `images/` and `layer/` beside itself regardless of the
+clone location. There is no path to edit. The `generated/` directory is created
+on demand.
+
+## Run and verify
+
+From a shell with WorldPainter 2.27.0's `wpscript` on `PATH`:
+
+```bash
+python -m unittest discover -s tools -p "test_*.py" -v
+python tools/validate_xenoearth_source.py .
+wpscript world_xenofactions.js --profile=smoke --preflightOnly
+wpscript world_xenofactions.js --profile=smoke
+```
+
+API preflight validates configuration, source files and image dimensions; resolves
+the legacy Anvil platform; loads Rivers and every built-in layer; constructs every
+selected-profile filter; and exits before loading the main heightmap. Success ends
+with `XenoEarth WorldPainter API preflight: PASS`.
+
+In the GUI, choose **Tools → Run Script…**, select `world_xenofactions.js`, select
+**smoke**, and first enable **API preflight only**. After PASS, run again with that
+box cleared. Progress identifies the active stage:
+
+1. Preflight
+2. Importing heightmap
+3. Applying biomes
+4. Applying surface terrain
+5. Applying oceans
+6. Applying rivers
+7. Applying ice
+8. Applying vegetation
+9. Saving project
+
+An exception immediately after a stage label belongs to that stage and is left
+intact for diagnosis; the script does not broadly catch and obscure WorldPainter
+exceptions.
+
+## Troubleshooting
+
+| Symptom | Root cause | Resolution |
+|---|---|---|
+| `NullPointerException: ... scriptEngine is null` | Obsolete WorldPainter 2.7.18 has no usable engine for this script path. | Install WorldPainter 2.27.0 and rerun preflight. |
+| `ClassCastException: Cannot cast java.lang.String to ... Platform` | A format ID string was passed to `withMapFormat()`. | Current script resolves `org.pepsoft.anvil` through `getMapFormat()` and passes its returned `Platform`. |
+| `resize must keep both output dimensions on 512-block region boundaries` | Old validation incorrectly rejected legal partial edge regions and its own scale-10 resize. | Current profiles require only positive, integral, 16-block-aligned dimensions. |
+| `Only one or "except on" condition may be specified` | Old river and vegetation builders chained multiple `exceptOnBiome` calls and then a layer exclusion. | Rivers use one `onlyOnLand`; vegetation uses one `onlyOnLand` and, when rivers exist, one `exceptOnLayer`. |
+
+## Manual visual/export checklist
+
+1. Open `generated/earth_1-16000_xenofactions_1.7.10_smoke.world` in WorldPainter
+   2.27.0 and confirm dimensions 2,688 × 1,344, water level 62, plausible coastlines,
+   deep/shallow ocean, inland river channels, frozen areas, terrain colours, and
+   vegetation confined to land and absent from river channels.
+2. Select a small representative area containing coast, river, ice, and vegetation.
+3. Export only that selection using legacy **Minecraft 1.2–1.12 / Anvil** settings.
+4. Disable Populate, Resources, Caves, Caverns, Chasms, Ravines, Structures, lava
+   lakes/pockets, and every unlisted underground generator. Keep bottomless world
+   off and normal bedrock enabled.
+5. Run the Phase 2 checks in `tools/export-validation/README.md` before opening the
+   save in Forge 1.7.10. Do not treat successful project creation as proof that an
+   export is safe.
 
 ## Features
 
@@ -69,10 +123,11 @@ chosen WorldPainter release.
 | Cities / Streets / Borders / Portals | **Disabled** | Assets preserved, never loaded |
 | Minecraft population | **Disabled** | Never mark chunks for Populate |
 
-One shared vegetation filter excludes mapped river channels, Ocean (0), Deep Ocean
-(24), Frozen Ocean (10), surfaces at or below `seaLevel`, and slopes above
-`maximumVegetationSlope` (default 35 degrees). Gentle river-bank land and actual
-swamp land remain eligible. Vegetation rules group compatible climates to control memory: deciduous/birch/
+The vegetation filter uses WorldPainter 2.27.0's `onlyOnLand()` condition, excludes the Rivers layer when rivers are enabled,
+and limits placement to surfaces above `seaLevel` and slopes no steeper than
+`maximumVegetationSlope` (default 35 degrees). A separate legal filter without
+`exceptOnLayer()` is constructed when rivers are disabled. Gentle river-bank land
+and actual swamp land remain eligible. Vegetation rules group compatible climates to control memory: deciduous/birch/
 roofed/plains, taiga/mega-taiga/cold terrain, jungle, savanna, and swamp. Desert,
 beach, permanent snow, and ocean columns intentionally receive no normal-tree
 rule; ice receives Frost. Intensities are conservative. Built-in object exporters

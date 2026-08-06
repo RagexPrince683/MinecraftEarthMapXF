@@ -2,7 +2,8 @@
 
 This pipeline generates a conservative **Minecraft Forge 1.7.10** WorldPainter
 project from the repository's Earth sources. `world.js` remains the unchanged
-upstream reference. The supported script is `world_xenofactions.js`.
+upstream reference. `world_xenofactions_core.js` contains the shared generator;
+the other `world_xenofactions*.js` files are lightweight launchers.
 
 ## Required WorldPainter version
 
@@ -29,11 +30,40 @@ with `go()` at the point required by that API.
 The Run Script dialog exposes `profile` and `preflightOnly`; users do not edit the
 source. The default is deliberately the small `smoke` profile.
 
-| Profile | Source | Resize | Effective scale | Output dimensions | Project |
-|---|---:|---:|---:|---:|---|
-| `smoke` (default) | 10 | 25% | 1:16000 | 2,688 × 1,344 | `generated/earth_1-16000_xenofactions_1.7.10_smoke.world` |
-| `preview` | 10 | 100% | 1:4000 | 10,752 × 5,376 | `generated/earth_1-4000_xenofactions_1.7.10_preview.world` |
-| `production` | 40 | 100% | 1:1000 | 43,008 × 21,504 | `generated/earth_1-1000_xenofactions_1.7.10_production.world` |
+| Profile | Scale | Source images | Resize | Dimensions |
+|---|---:|---:|---:|---:|
+| `smoke` (default) | 1:16000 | 10k | 25% | 2,688 × 1,344 |
+| `earth8000` | 1:8000 | 10k | 50% | 5,376 × 2,688 |
+| `earth4000` | 1:4000 | 10k | 100% | 10,752 × 5,376 |
+| `earth2000` | 1:2000 | 20k | 100% | 21,504 × 10,752 |
+| `production` | 1:1000 | 40k | 100% | 43,008 × 21,504 |
+
+`preview` remains a backward-compatible alias for the single canonical
+`earth4000` configuration. Generate either by running the general
+`world_xenofactions.js` script and entering a profile name, or by running
+`world_xenofactions_1_8000.js`, `world_xenofactions_1_4000.js`, or
+`world_xenofactions_1_2000.js` directly. The launchers load the core using the
+Nashorn `load(URL)` function with a `java.io.File` child of WorldPainter's
+injected `scriptDir`; they never depend on the process working directory.
+
+The relative pixel area quadruples at each step: 1:8000 has 1/4 the area of
+1:4000, 1:4000 has 1/4 the area of 1:2000, and 1:2000 has 1/4 the area of
+1:1000. No particular project or exported-save file size is implied.
+
+The canonical bounds and spawn points are:
+
+| Profile | Bounds (X, Z inclusive) | Spawn (X, Z) |
+|---|---|---:|
+| `earth8000` | -2,688..2,687; -1,344..1,343 | 553, -57 |
+| `earth4000` | -5,376..5,375; -2,688..2,687 | 1,105, -114 |
+| `earth2000` | -10,752..10,751; -5,376..5,375 | 2,210, -228 |
+
+The 10k profiles consume `HeightMap10k.png`, `BiomeMap10k.png`,
+`WaterMap10k.png`, `Ice10k.png`, and `globecover10k.png`; `earth2000` uses the
+corresponding complete 20k images. Only `production` uses the split 40k
+GlobCover inputs. Outputs are uniquely named
+`earth_1-<scale>_xenofactions_1.7.10_<canonical-profile>.world` and
+`xenoearth-profile-<canonical-profile>.json` under `generated/`.
 
 Each run writes `generated/xenoearth-profile-<profile>.json`. The tracked root
 `xenoearth-profile.json` is the production source contract and is never
@@ -61,9 +91,10 @@ the legacy Anvil platform; loads Rivers and every built-in layer; constructs eve
 selected-profile filter; and exits before loading the main heightmap. Success ends
 with `XenoEarth WorldPainter API preflight: PASS`.
 
-In the GUI, choose **Tools → Run Script…**, select `world_xenofactions.js`, select
-**smoke**, and first enable **API preflight only**. After PASS, run again with that
-box cleared. Progress identifies the active stage:
+In the GUI, choose **Tools → Run Script…**, select the general launcher and enter
+a profile, or select a dedicated scale launcher. First enable **API preflight
+only**. After PASS, run again with that box cleared. Progress appears in the Run
+Script Output panel and identifies the active stage:
 
 1. Preflight
 2. Importing heightmap

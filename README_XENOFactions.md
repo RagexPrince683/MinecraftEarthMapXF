@@ -81,6 +81,16 @@ exceptions.
 
 ## Troubleshooting
 
+**Error:**
+`No default layer named "Deciduous Forest" exists and no world specified`
+
+**Cause:**
+The script used a Java class/description-style name rather than the exact
+WorldPainter layer name.
+
+**Fix:**
+Use `"Deciduous"` and `"Pine"`, not `"Deciduous Forest"` or `"Pine Forest"`.
+
 | Symptom | Root cause | Resolution |
 |---|---|---|
 | `NullPointerException: ... scriptEngine is null` | Obsolete WorldPainter 2.7.18 has no usable engine for this script path. | Install WorldPainter 2.27.0 and rerun preflight. |
@@ -169,8 +179,7 @@ not implemented here.
 
 `Rivers.layer` is the sole external layer kept in the executable profile. It is a
 two-block ground-cover cut using vanilla water (ID 9, level metadata 0) and is safe
-for 1.7.10. Built-in Biomes, Frost, Deciduous Forest, Pine Forest, Jungle, and
-Swamp layers are also used. The inspected but disabled layers are:
+for 1.7.10. Built-in Biomes, Frost, Deciduous, Pine, Jungle, and Swamp layers are also used. The inspected but disabled layers are:
 
 | Definition(s) | What it can place | Decision |
 |---|---|---|

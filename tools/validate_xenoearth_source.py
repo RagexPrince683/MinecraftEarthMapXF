@@ -8,6 +8,8 @@ SCALE_DIMENSIONS={10:(10752,5376),40:(43008,21504)}
 PROFILES={"smoke":(10,25,16000,2688,1344),"preview":(10,100,4000,10752,5376),"production":(40,100,1000,43008,21504)}
 ALLOWED_1710_BIOMES={0,1,2,3,4,5,6,7,10,12,13,16,17,21,22,23,24,26,27,29,30,32,35,36,37,129,130,131,132,134,140,149,151,160,161}
 DISABLED_FLAGS=("generateCaves","generateCaverns","generateChasms","generateRavines","generateOres","generateResources","generateLava","generateStructures","generateCities","generateStreets","generateBorders","generatePortals","allowMinecraftPopulation")
+BUILTIN_LAYERS={"biomes":"Biomes","frost":"Frost","deciduous":"Deciduous","pine":"Pine","jungle":"Jungle","swamp":"Swamp"}
+FORBIDDEN_LAYER_NAMES={"Deciduous Forest","Pine Forest","Swamp Land","DeciduousForest","PineForest","SwampLand"}
 
 def png_dimensions(path:Path)->tuple[int,int]:
     with path.open("rb") as stream: header=stream.read(24)
@@ -57,6 +59,45 @@ def validate_filter_chains(source:str)->list[str]:
         if not re.search(r"\.go\s*\(\s*\)\s*$",chain): errors.append(f"filter {number} does not terminate with go()")
     return errors
 
+def validate_with_name_arguments(source:str)->list[str]:
+    """Reject known description aliases and Java class names in executable lookups."""
+    errors=[]
+    for name in re.findall(r'\.withName\s*\(\s*["\']([^"\']+)["\']\s*\)',strip_comments(source)):
+        if name in FORBIDDEN_LAYER_NAMES:
+            errors.append(f"forbidden WorldPainter layer name passed to withName(): {name}")
+    return errors
+
+def validate_builtin_layers(source:str)->list[str]:
+    errors=[]; executable=strip_comments(source)
+    errors.extend(validate_with_name_arguments(executable))
+    registry=re.search(r"var\s+BUILTIN_LAYER_NAMES\s*=\s*\{(.*?)\}\s*;",executable,re.S)
+    if not registry:
+        return errors+["central BUILTIN_LAYER_NAMES registry is required"]
+    entries=dict(re.findall(r'([A-Za-z]\w*)\s*:\s*["\']([^"\']+)["\']',registry.group(1)))
+    for key,name in BUILTIN_LAYERS.items():
+        if entries.get(key)!=name: errors.append(f"BUILTIN_LAYER_NAMES.{key} must be {name!r}")
+        if not re.search(rf"resolveBuiltInLayer\s*\(\s*BUILTIN_LAYER_NAMES\.{key}\s*\)",executable):
+            errors.append(f"enabled built-in layer {name!r} is not resolved during API preflight")
+    if not re.search(r'println\s*\(\s*["\']Resolved built-in layer: ["\']\s*\+\s*name\s*\)',executable):
+        errors.append("successful built-in layer lookups must be printed")
+    # Executable lookup sites must use the registry rather than duplicate literals.
+    if re.search(r'\.withName\s*\(\s*["\']',executable): errors.append("withName() built-in lookups must use BUILTIN_LAYER_NAMES")
+    veg_objects=re.findall(r"objects\.vegetationLayers\s*=\s*\{(.*?)\}\s*;",executable,re.S)
+    vegetation_keys=set(re.findall(r"\b(deciduous|pine|jungle|swamp)\s*:",veg_objects[-1])) if veg_objects else set()
+    if vegetation_keys!=set(BUILTIN_LAYERS)-{"biomes","frost"}: errors.append("vegetationLayers must define all semantic vegetation keys")
+    rules=re.search(r"var\s+rules\s*=\s*\[(.*?)\]\s*;",executable,re.S)
+    rule_keys=re.findall(r'\[\s*["\']([^"\']+)["\']\s*,\s*\[',rules.group(1)) if rules else []
+    if not rule_keys: errors.append("semantic vegetation rules are required")
+    for key in rule_keys:
+        if key not in vegetation_keys: errors.append(f"unknown vegetation layer key in rule: {key}")
+    if re.search(r"vegetationLayers\s*\[\s*\d+\s*\]",executable) or re.search(r"var\s+rules\s*=\s*\[\s*\[\s*\d",executable):
+        errors.append("positional vegetation layer indexes are forbidden")
+    if "unknown vegetation layer key:" not in executable: errors.append("unknown vegetation rule keys must fail clearly")
+    build=executable.find("var api=buildApiObjects()")
+    passed=executable.find("XenoEarth WorldPainter API preflight: PASS")
+    if build<0 or passed<0 or passed<build: errors.append("preflight PASS must occur after all layer lookups")
+    return errors
+
 def validate(root:Path)->list[str]:
     errors=[]; script=root/"world_xenofactions.js"; contract=root/"xenoearth-profile.json"
     for rel in ("README.md","LICENSE","world.js","layer/Rivers.layer",script.name,contract.name):
@@ -64,6 +105,7 @@ def validate(root:Path)->list[str]:
     if not script.is_file(): return errors
     source=script.read_text(encoding="utf-8"); executable=strip_comments(source)
     errors.extend(validate_filter_chains(source))
+    errors.extend(validate_builtin_layers(source))
     if re.search(r"(?:[A-Za-z]:[\\/]|var\s+path\s*=|/Users/|/home/)",executable): errors.append("script contains a machine-specific absolute path")
     if "new java.io.File(scriptDir)" not in executable: errors.append("script must derive sourceRoot from scriptDir")
     if "script.param.profile.default=smoke" not in source: errors.append("default GUI profile must be smoke")

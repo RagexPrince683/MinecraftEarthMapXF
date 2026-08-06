@@ -34,6 +34,11 @@ var allowMinecraftPopulation = false;
 
 var vegetationSeed = 68317010;
 var vegetationDensity = 3; // Conservative WorldPainter layer intensity (0..15).
+var maximumVegetationSlope = 35;
+
+var LEGACY_ANVIL_MAP_FORMAT = "org.pepsoft.anvil";
+var LOWER_BUILD_LIMIT = 0;
+var UPPER_BUILD_LIMIT = 256;
 
 // Central compatibility registry. No custom terrain is enabled until its entire
 // material stack is safe. Built-in terrain numbers used below are not slots.
@@ -108,7 +113,9 @@ function validateConfiguration() {
     if (minimumSurfaceY >= seaLevel) fail("minimumSurfaceY must be below seaLevel");
     if (seaLevel >= maximumSurfaceY) fail("seaLevel must be below maximumSurfaceY");
     if (vegetationDensity < 0 || vegetationDensity > 15) fail("vegetationDensity must be from 0 through 15");
+    if (maximumVegetationSlope < 0 || maximumVegetationSlope > 90) fail("maximumVegetationSlope must be from 0 through 90");
     for (var i = 0; i < BIOME_MAPPINGS.length; i++) {
+        wp.checkForInterrupt();
         if (!ALLOWED_BIOME_IDS.hasOwnProperty(BIOME_MAPPINGS[i][3])) fail("unsupported biome ID " + BIOME_MAPPINGS[i][3]);
     }
 
@@ -134,9 +141,14 @@ var suffix = String(scale) + "k.png";
 var westShift = -Math.round(537.6 * scale * (resize / 100));
 var northShift = -Math.round(268.8 * scale * (resize / 100));
 var heightMap = wp.getHeightMap().fromFile(path + "images/HeightMap" + suffix).go();
+java.lang.System.out.println("Creating project with required map format " + LEGACY_ANVIL_MAP_FORMAT
+    + ", build limits " + LOWER_BUILD_LIMIT + ".." + (UPPER_BUILD_LIMIT - 1) + ", and water level " + seaLevel + ".");
 var world = wp.createWorld().fromHeightMap(heightMap).scale(resize)
     .shift(westShift, northShift).fromLevels(0, 65535)
-    .toLevels(minimumSurfaceY, maximumSurfaceY).go();
+    .toLevels(minimumSurfaceY, maximumSurfaceY)
+    .withMapFormat(LEGACY_ANVIL_MAP_FORMAT)
+    .withLowerBuildLimit(LOWER_BUILD_LIMIT).withUpperBuildLimit(UPPER_BUILD_LIMIT)
+    .withWaterLevel(seaLevel).go();
 heightMap = null;
 world.setSpawnPoint(new java.awt.Point(Math.round(110.5 * scale), -Math.round(11.4 * scale)));
 
@@ -145,6 +157,7 @@ var biomeMap = wp.getHeightMap().fromFile(path + "images/BiomeMap" + suffix).go(
 var biomeApplication = wp.applyHeightMap(biomeMap).toWorld(world).scale(resize)
     .shift(westShift, northShift).applyToLayer(biomesLayer);
 for (var b = 0; b < BIOME_MAPPINGS.length; b++) {
+    wp.checkForInterrupt();
     var m = BIOME_MAPPINGS[b]; biomeApplication = biomeApplication.fromColour(m[0],m[1],m[2]).toLevel(m[3]);
 }
 biomeApplication.go();
@@ -172,6 +185,7 @@ if (groundMaterialMode === "globecover") {
             ["globecover4_40k.png", 0, 0]
         ];
         for (var gp = 0; gp < globecoverParts.length; gp++) {
+            wp.checkForInterrupt();
             var globecoverMap = wp.getHeightMap().fromFile(path + "images/" + globecoverParts[gp][0]).go();
             applyGlobCover(globecoverMap, globecoverParts[gp][1], globecoverParts[gp][2]);
             globecoverMap = null;
@@ -182,22 +196,36 @@ if (groundMaterialMode === "globecover") {
     }
 }
 
-var oceanFilter = wp.createFilter().aboveLevel(minimumSurfaceY).belowLevel(SHALLOW_OCEAN_THRESHOLD).onlyOnBiome(0).go();
-var deepOceanFilter = wp.createFilter().aboveLevel(minimumSurfaceY).belowLevel(DEEP_OCEAN_THRESHOLD).onlyOnBiome(0).go();
+var shallowOceanFilter = wp.createFilter().aboveLevel(DEEP_OCEAN_THRESHOLD).belowLevel(SHALLOW_OCEAN_THRESHOLD).onlyOnBiome(0).go();
+var initialDeepOceanFilter = wp.createFilter().aboveLevel(minimumSurfaceY).belowLevel(DEEP_OCEAN_THRESHOLD).onlyOnBiome(0).go();
 wp.applyHeightMap(biomeMap).toWorld(world).scale(resize).shift(westShift,northShift)
-    .applyToLayer(biomesLayer).withFilter(deepOceanFilter).fromColour(0,0,0).toLevel(24).go();
+    .applyToLayer(biomesLayer).withFilter(initialDeepOceanFilter).fromColour(0,0,0).toLevel(24).go();
+var deepOceanFilter = wp.createFilter().aboveLevel(minimumSurfaceY).belowLevel(DEEP_OCEAN_THRESHOLD).onlyOnBiome(24).go();
 // Built-in sand (5) is used for both ocean floor bands; no unverified custom terrain is loaded.
 wp.applyHeightMap(biomeMap).toWorld(world).scale(resize).shift(westShift,northShift)
-    .applyToTerrain().withFilter(oceanFilter).fromColour(0,0,0).toTerrain(5).go();
+    .applyToTerrain().withFilter(shallowOceanFilter).fromColour(0,0,0).toTerrain(5).go();
 
-var riverMask = wp.getHeightMap().fromFile(path + "images/WaterMap" + suffix).go();
+var riverMask = null;
+var riverLayer = null;
 if (generateRivers) {
-    var riverLayer = wp.getLayer().fromFile(path + "layer/Rivers.layer").go();
-    var riverFilter = wp.createFilter().aboveLevel(RIVER_THRESHOLD).belowLevel(maximumSurfaceY).onlyOnBiome(0).go();
+    riverMask = wp.getHeightMap().fromFile(path + "images/WaterMap" + suffix).go();
+    riverLayer = wp.getLayer().fromFile(path + "layer/Rivers.layer").go();
+    var inlandRiverFilter = wp.createFilter().aboveLevel(RIVER_THRESHOLD).belowLevel(maximumSurfaceY)
+        .exceptOnBiome(0).exceptOnBiome(24).exceptOnBiome(10).go();
+    var oceanRiverMaskOverlapFilter = wp.createFilter().aboveLevel(minimumSurfaceY).belowLevel(seaLevel).go();
     wp.applyHeightMap(riverMask).toWorld(world).scale(resize).shift(westShift,northShift)
-        .applyToLayer(riverLayer).fromLevel(0).toLevel(0).fromLevels(1,255).toLevel(1).go();
+        .applyToLayer(riverLayer).withFilter(inlandRiverFilter).fromLevel(0).toLevel(0).fromLevels(1,255).toLevel(1).go();
     wp.applyHeightMap(riverMask).toWorld(world).scale(resize).shift(westShift,northShift)
-        .applyToLayer(biomesLayer).withFilter(riverFilter).fromLevels(1,255).toLevel(7).go();
+        .applyToLayer(biomesLayer).withFilter(inlandRiverFilter).fromLevels(1,255).toLevel(7).go();
+    // Explicitly erase ground-cover river data and restore the ocean floor wherever
+    // the mask reaches water, so it cannot raise a water surface across an ocean.
+    wp.applyHeightMap(riverMask).toWorld(world).scale(resize).shift(westShift,northShift)
+        .applyToLayer(riverLayer).withFilter(oceanRiverMaskOverlapFilter).fromLevels(1,255).toLevel(0).go();
+    wp.applyHeightMap(riverMask).toWorld(world).scale(resize).shift(westShift,northShift)
+        .applyToTerrain().withFilter(deepOceanFilter).fromLevels(1,255).toTerrain(5).go();
+    wp.applyHeightMap(riverMask).toWorld(world).scale(resize).shift(westShift,northShift)
+        .applyToTerrain().withFilter(shallowOceanFilter).fromLevels(1,255).toTerrain(5).go();
+    riverMask = null;
 }
 
 if (generateIce) {
@@ -213,6 +241,11 @@ if (generateIce) {
 // Offline vegetation uses shared, built-in WorldPainter layers. Their exporters
 // perform object placement before Minecraft runs; population remains forbidden.
 if (generateVegetation) {
+    var vegetationFilterBuilder = wp.createFilter().aboveLevel(seaLevel)
+        .belowLevel(maximumSurfaceY).belowDegrees(maximumVegetationSlope)
+        .exceptOnBiome(0).exceptOnBiome(24).exceptOnBiome(10);
+    if (riverLayer !== null) vegetationFilterBuilder = vegetationFilterBuilder.exceptOnLayer(riverLayer);
+    var vegetationFilter = vegetationFilterBuilder.go();
     var vegetationRules = [
         ["Deciduous Forest", [[0,255,255],[200,255,80],[100,255,80],[255,255,0],[200,200,0]]], // forest/birch/plains
         ["Deciduous Forest", [[55,200,255],[170,175,255]]], // roofed forest/swamp
@@ -222,9 +255,13 @@ if (generateVegetation) {
         ["Swamp", [[90,120,220]]] // swamp plants; desert intentionally has no tree layer
     ];
     for (var vr = 0; vr < vegetationRules.length; vr++) {
+        wp.checkForInterrupt();
         var vegetationLayer = wp.getLayer().withName(vegetationRules[vr][0]).go();
-        var veg = wp.applyHeightMap(biomeMap).toWorld(world).scale(resize).shift(westShift,northShift).applyToLayer(vegetationLayer);
+        wp.checkForInterrupt();
+        var veg = wp.applyHeightMap(biomeMap).toWorld(world).scale(resize).shift(westShift,northShift)
+            .applyToLayer(vegetationLayer).withFilter(vegetationFilter);
         for (var c = 0; c < vegetationRules[vr][1].length; c++) {
+            wp.checkForInterrupt();
             var colour = vegetationRules[vr][1][c];
             veg = veg.fromColour(colour[0],colour[1],colour[2]).toLevel(vegetationDensity);
         }
@@ -232,7 +269,7 @@ if (generateVegetation) {
     }
 }
 
-biomeMap = null; riverMask = null;
+biomeMap = null; riverMask = null; riverLayer = null;
 
 var denominator = Math.round(40 / scale * 1000);
 var outputName = "earth_1-" + denominator + "_xenofactions_1.7.10" + (resize === 100 ? "" : "_resize-" + resize) + ".world";
@@ -252,7 +289,7 @@ var profile = {
 var profileWriter = new java.io.FileWriter(path + "xenoearth-profile.json");
 profileWriter.write(JSON.stringify(profile, null, 2) + "\n"); profileWriter.close();
 java.lang.System.out.println("\n*** REQUIRED MANUAL EXPORT CHECKLIST (NOT SCRIPT-CONTROLLABLE) ***");
-java.lang.System.out.println("Select the Minecraft 1.7.10 (Anvil) platform; disable Populate; Resources; Caves, Caverns and Chasms; Structures; and lava lakes/pockets. Disable any other underground pockets or ravine generator. Enable bottomless world OFF so y=0 exports as bedrock.");
+java.lang.System.out.println("The project already uses legacy Anvil and build limits 0..255. Disable Populate; Resources; Caves, Caverns and Chasms; Structures; and lava lakes/pockets. Disable any other underground pockets or ravine generator. Keep bottomless world OFF so y=0 exports as bedrock.");
 java.lang.System.out.println("vegetationSeed=" + vegetationSeed + " records reproducibility; this WorldPainter API does not expose a verified per-layer seed setter.");
 wp.saveWorld(world).toFile(path + outputName).go();
 world = null;

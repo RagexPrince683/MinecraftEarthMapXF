@@ -58,6 +58,11 @@ def required_images(scale: int) -> dict[str, tuple[int, int]]:
     return result
 
 
+def contains_call(source: str, method: str, argument: str) -> bool:
+    """Match a JavaScript fluent call without depending on formatting."""
+    return re.search(rf"\.{re.escape(method)}\s*\(\s*{argument}\s*\)", source) is not None
+
+
 def validate(root: Path) -> list[str]:
     errors: list[str] = []
     script_path = root / "world_xenofactions.js"
@@ -70,6 +75,7 @@ def validate(root: Path) -> list[str]:
     expected = {
         "targetMinecraftVersion": '"1.7.10"', "scale": "40", "minimumSurfaceY": "1",
         "maximumSurfaceY": "254", "seaLevel": "62", "allowMinecraftPopulation": "false",
+        "maximumVegetationSlope": "35",
     }
     for name, wanted in expected.items():
         if value(source, name) != wanted: errors.append(f"{name} must default to {wanted}")
@@ -92,6 +98,46 @@ def validate(root: Path) -> list[str]:
     registry = re.search(r"var CUSTOM_TERRAIN_COMPATIBILITY\s*=\s*\{(.*?)\};", source, re.DOTALL)
     if terrain_loads and (not registry or not registry.group(1).strip()):
         errors.append("enabled custom terrain lacks a compatibility entry")
+
+    creation_rules = (
+        (contains_call(executable, "withMapFormat", r"LEGACY_ANVIL_MAP_FORMAT"), "world creation must request the legacy Anvil map format"),
+        (value(source, "LEGACY_ANVIL_MAP_FORMAT") == '"org.pepsoft.anvil"', "legacy map format must be org.pepsoft.anvil"),
+        (value(source, "LOWER_BUILD_LIMIT") == "0" and contains_call(executable, "withLowerBuildLimit", "LOWER_BUILD_LIMIT"), "world creation must use lower build limit 0"),
+        (value(source, "UPPER_BUILD_LIMIT") == "256" and contains_call(executable, "withUpperBuildLimit", "UPPER_BUILD_LIMIT"), "world creation must use upper build limit 256"),
+        (contains_call(executable, "withWaterLevel", "seaLevel"), "world creation must use the configured seaLevel"),
+    )
+    for passed, message in creation_rules:
+        if not passed: errors.append(message)
+
+    inland = re.search(r"var\s+inlandRiverFilter\s*=\s*(.*?\.go\s*\(\s*\))", executable, re.DOTALL)
+    if not inland: errors.append("named inland river filter is missing")
+    elif "onlyOnBiome" in inland.group(1): errors.append("inland River biome assignment must not depend on onlyOnBiome(0)")
+    overlap_application = re.search(
+        r"wp\.applyHeightMap\s*\(\s*riverMask\s*\)(?:(?!\.go\s*\(\s*\)).)*"
+        r"applyToLayer\s*\(\s*riverLayer\s*\)(?:(?!\.go\s*\(\s*\)).)*"
+        r"withFilter\s*\(\s*oceanRiverMaskOverlapFilter\s*\)(?:(?!\.go\s*\(\s*\)).)*"
+        r"toLevel\s*\(\s*0\s*\)\s*\.go\s*\(\s*\)", executable, re.DOTALL)
+    if not overlap_application:
+        errors.append("river layer must be erased in ocean river-mask overlap")
+
+    vegetation = re.search(r"var\s+vegetationFilterBuilder\s*=\s*(.*?);", executable, re.DOTALL)
+    if not vegetation or not contains_call(vegetation.group(1), "belowDegrees", "maximumVegetationSlope"):
+        errors.append("shared vegetation filter must enforce maximumVegetationSlope")
+    if not contains_call(executable, "exceptOnLayer", "riverLayer"):
+        errors.append("shared vegetation filter must exclude Rivers.layer")
+    if not re.search(r"applyToLayer\s*\(\s*vegetationLayer\s*\)\s*\.withFilter\s*\(\s*vegetationFilter\s*\)", executable):
+        errors.append("every vegetation application must use the shared vegetation filter")
+    if not re.search(r"maximumVegetationSlope\s*<\s*0.*?maximumVegetationSlope\s*>\s*90", executable, re.DOTALL):
+        errors.append("maximumVegetationSlope must be validated from 0 through 90")
+
+    for iterator, label in (("i", "BIOME_MAPPINGS validation"), ("b", "biome colour mapping"),
+                            ("gp", "GlobCover part"), ("vr", "vegetation rule"),
+                            ("c", "vegetation colour")):
+        interrupt_at_entry = re.search(
+            rf"for\s*\(\s*var\s+{re.escape(iterator)}\b[^)]*\)\s*\{{\s*wp\.checkForInterrupt\s*\(\s*\)\s*;",
+            executable)
+        if not interrupt_at_entry:
+            errors.append(f"{label} loop must call wp.checkForInterrupt()")
 
     checklist = "REQUIRED MANUAL EXPORT CHECKLIST"
     for label in ("Populate", "Resources", "Caves", "Caverns", "Chasms", "Structures", "lava"):

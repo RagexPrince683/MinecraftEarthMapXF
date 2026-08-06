@@ -27,7 +27,9 @@ and the enabled vegetation exporters.
 2. Edit `path` at the top of `world_xenofactions.js`. Use `/`, and include the
    trailing slash, for example `C:/WorldPainter/Script/`.
 3. Leave the target at `1.7.10`; select scale `10`, `20`, or `40`. Keep the default
-   height range `1..254` and sea level 62.
+   terrain-surface range `1..254` and sea level 62. The script selects the legacy
+   `org.pepsoft.anvil` map format and fails clearly if the installed WorldPainter
+   does not provide it.
 4. Run the source check: `python3 tools/validate_xenoearth_source.py .`.
 5. In WorldPainter choose **Tools → Run Script…**, select
    `world_xenofactions.js`, and run it. Do not use `world.js` for XenoFactions;
@@ -37,8 +39,12 @@ and the enabled vegetation exporters.
    the corresponding denominator; resized projects include a resize suffix.
 
 The script reads image headers before world creation, maps the full 16-bit source
-range to y=1..254, releases large maps after their final use, and loads each used
-external layer once. `vegetationSeed` records the intended deterministic seed.
+range to y=1..254, and creates an Anvil project with build limits 0 through 255
+(API upper limit 256) and water at the configured `seaLevel`. This reserves y=0
+for the exported bedrock floor and never places a terrain surface at y=0 or y=255.
+It releases large maps after their final use and loads each used external layer
+once. Long section/rule loops call `wp.checkForInterrupt()`, allowing clean user
+cancellation. `vegetationSeed` records the intended deterministic seed.
 The inspected scripting surface provides no verified per-layer seed setter, so the
 script does not invent one; deterministic export behavior must be confirmed in the
 chosen WorldPainter release.
@@ -50,7 +56,7 @@ chosen WorldPainter release.
 | Earth terrain | Enabled | `HeightMap…png`, mapped to y=1..254 |
 | Bathymetry | Enabled | Combined 16-bit height source |
 | Oceans | Enabled | Sea level 62; shallow/deep thresholds derive from it |
-| Rivers | Enabled | `WaterMap…png` + verified `Rivers.layer` |
+| Rivers | Enabled | `WaterMap…png` + verified `Rivers.layer`; inland mask columns receive River biome ID 7, while ocean overlap is erased and its sand floor restored |
 | Climate biomes | Enabled | `BiomeMap…png`; only 1.7.10 IDs |
 | Ice | Enabled | `Ice…png`, Frozen Ocean + built-in Frost |
 | Surface materials | Enabled | GlobCover masks and legacy built-in terrain |
@@ -63,7 +69,10 @@ chosen WorldPainter release.
 | Cities / Streets / Borders / Portals | **Disabled** | Assets preserved, never loaded |
 | Minecraft population | **Disabled** | Never mark chunks for Populate |
 
-Vegetation rules group compatible climates to control memory: deciduous/birch/
+One shared vegetation filter excludes mapped river channels, Ocean (0), Deep Ocean
+(24), Frozen Ocean (10), surfaces at or below `seaLevel`, and slopes above
+`maximumVegetationSlope` (default 35 degrees). Gentle river-bank land and actual
+swamp land remain eligible. Vegetation rules group compatible climates to control memory: deciduous/birch/
 roofed/plains, taiga/mega-taiga/cold terrain, jungle, savanna, and swamp. Desert,
 beach, permanent snow, and ocean columns intentionally receive no normal-tree
 rule; ice receives Frost. Intensities are conservative. Built-in object exporters
@@ -79,17 +88,19 @@ filters, layers, terrain application, spawn, and project save. No verified calls
 were found for the following export settings. Consequently the script prints this
 checklist prominently and **the source project alone is not an export validation**:
 
-1. Select **Minecraft 1.7.10 (Anvil)**, not a 1.12.2 or modern platform.
-2. Turn **Populate / allow Minecraft to populate terrain OFF**. Chunks must not be
+The map format, build limits, and water level are already set by the script and are
+therefore not manual checklist items.
+
+1. Turn **Populate / allow Minecraft to populate terrain OFF**. Chunks must not be
    marked for later vanilla decoration.
-3. Turn **Resources OFF** (including underground pockets/deposits).
-4. Turn **Caves, Caverns, Chasms, and any Ravines OFF**.
-5. Turn **Structures OFF** (villages, mineshafts, strongholds, temples, etc.).
-6. Turn **lava lakes and lava pockets OFF**.
-7. Disable every other underground pocket or custom underground layer.
-8. Keep **bottomless world OFF** and use normal bedrock so y=0 is reserved for
+2. Turn **Resources OFF** (including underground pockets/deposits).
+3. Turn **Caves, Caverns, Chasms, and any Ravines OFF**.
+4. Turn **Structures OFF** (villages, mineshafts, strongholds, temples, etc.).
+5. Turn **lava lakes and lava pockets OFF**.
+6. Disable every other underground pocket or custom underground layer.
+7. Keep **bottomless world OFF** and use normal bedrock so y=0 is reserved for
    bedrock. Do not export terrain above y=254.
-9. Do not enable any resource, object, or layer not documented by this profile.
+8. Do not enable any resource, object, or layer not documented by this profile.
 
 Opening a 1.12.2 save directly in Forge 1.7.10 is unsafe: the newer save may
 contain block states, IDs, metadata, entities, and NBT schemas the older server

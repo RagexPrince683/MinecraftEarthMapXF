@@ -33,14 +33,14 @@ class FilterParserTests(unittest.TestCase):
 class SourceTests(unittest.TestCase):
     def fixture(self,mutate=None):
         root=Path(__file__).resolve().parents[1]; temp=tempfile.TemporaryDirectory(); copy=Path(temp.name)
-        for name in ("README.md","LICENSE","world.js","world_xenofactions.js","xenoearth-profile.json"):
+        for name in ("README.md","LICENSE","world.js","world_xenofactions.js","world_xenofactions_core.js","world_xenofactions_1_8000.js","world_xenofactions_1_4000.js","world_xenofactions_1_2000.js","xenoearth-profile.json"):
             (copy/name).write_bytes((root/name).read_bytes())
         (copy/"layer").mkdir(); (copy/"layer/Rivers.layer").write_bytes(b"test")
-        for scale in (10,40):
+        for scale in validator.SCALE_DIMENSIONS:
             for rel,dims in validator.required_images(scale).items():
                 target=copy/rel; target.parent.mkdir(parents=True,exist_ok=True); target.write_bytes(png_header(*dims))
         if mutate:
-            path=copy/"world_xenofactions.js"; source=path.read_text(); source,count=re.subn(mutate[0],mutate[1],source,count=1,flags=re.S); self.assertEqual(count,1); path.write_text(source)
+            path=copy/"world_xenofactions_core.js"; source=path.read_text(); source,count=re.subn(mutate[0],mutate[1],source,count=1,flags=re.S); self.assertEqual(count,1); path.write_text(source)
         return temp,copy
     def mutation_errors(self,pattern,replacement):
         temp,copy=self.fixture((pattern,replacement))
@@ -54,18 +54,21 @@ class SourceTests(unittest.TestCase):
         errors=self.mutation_errors(r"var sourceRoot = new java\.io\.File\(scriptDir\);",'var sourceRoot = new java.io.File("C:/Users/example/Downloads/map");')
         self.assertTrue(any("absolute path" in e for e in errors))
     def test_profiles_have_expected_values(self):
-        source=(Path(__file__).resolve().parents[1]/"world_xenofactions.js").read_text()
+        source=(Path(__file__).resolve().parents[1]/"world_xenofactions_core.js").read_text()
         for name,(_,_,effective,width,height) in validator.PROFILES.items():
             with self.subTest(profile=name):
                 self.assertIn(f'{name}: {{name:"{name}"',source); self.assertIn(f'effectiveScale:{effective}',source); self.assertIn(f'width:{width}, height:{height}',source)
     def test_effective_scale_output_naming(self):
-        source=(Path(__file__).resolve().parents[1]/"world_xenofactions.js").read_text()
+        source=(Path(__file__).resolve().parents[1]/"world_xenofactions_core.js").read_text()
         self.assertIn('"earth_1-"+config.effectiveScale',source); self.assertIn('effectiveScale:config.effectiveScale',source)
     def test_default_profile_is_smoke(self):
-        errors=self.mutation_errors("script.param.profile.default=smoke","script.param.profile.default=production")
-        self.assertTrue(any("default GUI profile" in e for e in errors))
+        temp,copy=self.fixture()
+        try:
+            path=copy/"world_xenofactions.js"; path.write_text(path.read_text().replace("script.param.profile.default=smoke","script.param.profile.default=production"))
+            self.assertTrue(any("default GUI profile" in e for e in validator.validate(copy)))
+        finally: temp.cleanup()
     def test_rejects_region_boundary_regression(self):
-        source=(Path(__file__).resolve().parents[1]/"world_xenofactions.js").read_text(); self.assertNotIn("% 512",source); self.assertIn("% 16",source)
+        source=(Path(__file__).resolve().parents[1]/"world_xenofactions_core.js").read_text(); self.assertNotIn("% 512",source); self.assertIn("% 16",source)
     def test_bad_contract_fails(self):
         temp,copy=self.fixture()
         try:
@@ -91,5 +94,39 @@ class SourceTests(unittest.TestCase):
     def test_rejects_positional_vegetation_regression(self):
         errors=self.mutation_errors(r'\["deciduous",\[\[0,255,255\]', '[0,[[0,255,255]')
         self.assertTrue(any("positional vegetation" in error or "semantic vegetation" in error for error in errors))
+
+    def test_preview_aliases_canonical_earth4000(self):
+        source=(Path(__file__).resolve().parents[1]/"world_xenofactions_core.js").read_text()
+        self.assertRegex(source, r'PROFILE_ALIASES\s*=\s*\{preview:"earth4000"\}')
+        profiles=re.search(r"var PROFILES = \{(.*?)\};",source,re.S).group(1)
+        self.assertNotRegex(profiles,r"\bpreview\s*:\s*\{")
+
+    def test_rejects_earth8000_wrong_resize(self):
+        errors=self.mutation_errors(r'earth8000: \{name:"earth8000", sourceScale:10, resize:50', 'earth8000: {name:"earth8000", sourceScale:10, resize:100')
+        self.assertTrue(any("profile earth8000 definition is invalid" in e for e in errors))
+
+    def test_rejects_earth2000_wrong_source(self):
+        errors=self.mutation_errors(r'earth2000: \{name:"earth2000", sourceScale:20', 'earth2000: {name:"earth2000", sourceScale:10')
+        self.assertTrue(any("profile earth2000 definition is invalid" in e for e in errors))
+
+    def test_rejects_spawn_without_resize(self):
+        errors=self.mutation_errors(r'var horizontalScaleFactor = config\.sourceScale \* config\.resize / 100\.0;', 'var horizontalScaleFactor = config.sourceScale;')
+        self.assertTrue(any("spawn calculation must include resize" in e for e in errors))
+
+    def test_earth2000_requires_every_20k_asset(self):
+        for rel in validator.required_images(20):
+            with self.subTest(asset=rel):
+                temp,copy=self.fixture()
+                try:
+                    (copy/rel).unlink()
+                    self.assertTrue(any(rel in e for e in validator.validate(copy)))
+                finally: temp.cleanup()
+
+    def test_dedicated_launchers_select_exact_profiles(self):
+        root=Path(__file__).resolve().parents[1]
+        for filename,profile in validator.LAUNCHERS.items():
+            with self.subTest(launcher=filename):
+                source=(root/filename).read_text()
+                self.assertEqual(re.findall(r'runXenoEarth\(\s*"([^"]+)"',source),[profile])
 
 if __name__=="__main__": unittest.main()

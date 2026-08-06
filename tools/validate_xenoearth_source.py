@@ -4,8 +4,10 @@ from __future__ import annotations
 import argparse, json, re, struct, sys
 from pathlib import Path
 PNG_SIGNATURE=b"\x89PNG\r\n\x1a\n"
-SCALE_DIMENSIONS={10:(10752,5376),40:(43008,21504)}
-PROFILES={"smoke":(10,25,16000,2688,1344),"preview":(10,100,4000,10752,5376),"production":(40,100,1000,43008,21504)}
+SCALE_DIMENSIONS={10:(10752,5376),20:(21504,10752),40:(43008,21504)}
+PROFILES={"smoke":(10,25,16000,2688,1344),"earth8000":(10,50,8000,5376,2688),"earth4000":(10,100,4000,10752,5376),"earth2000":(20,100,2000,21504,10752),"production":(40,100,1000,43008,21504)}
+PROFILE_ALIASES={"preview":"earth4000"}
+LAUNCHERS={"world_xenofactions_1_8000.js":"earth8000","world_xenofactions_1_4000.js":"earth4000","world_xenofactions_1_2000.js":"earth2000"}
 ALLOWED_1710_BIOMES={0,1,2,3,4,5,6,7,10,12,13,16,17,21,22,23,24,26,27,29,30,32,35,36,37,129,130,131,132,134,140,149,151,160,161}
 DISABLED_FLAGS=("generateCaves","generateCaverns","generateChasms","generateRavines","generateOres","generateResources","generateLava","generateStructures","generateCities","generateStreets","generateBorders","generatePortals","allowMinecraftPopulation")
 BUILTIN_LAYERS={"biomes":"Biomes","frost":"Frost","deciduous":"Deciduous","pine":"Pine","jungle":"Jungle","swamp":"Swamp"}
@@ -78,7 +80,7 @@ def validate_builtin_layers(source:str)->list[str]:
         if entries.get(key)!=name: errors.append(f"BUILTIN_LAYER_NAMES.{key} must be {name!r}")
         if not re.search(rf"resolveBuiltInLayer\s*\(\s*BUILTIN_LAYER_NAMES\.{key}\s*\)",executable):
             errors.append(f"enabled built-in layer {name!r} is not resolved during API preflight")
-    if not re.search(r'println\s*\(\s*["\']Resolved built-in layer: ["\']\s*\+\s*name\s*\)',executable):
+    if not re.search(r'log\s*\(\s*["\']Resolved built-in layer: ["\']\s*\+\s*name\s*\)',executable):
         errors.append("successful built-in layer lookups must be printed")
     # Executable lookup sites must use the registry rather than duplicate literals.
     if re.search(r'\.withName\s*\(\s*["\']',executable): errors.append("withName() built-in lookups must use BUILTIN_LAYER_NAMES")
@@ -99,17 +101,20 @@ def validate_builtin_layers(source:str)->list[str]:
     return errors
 
 def validate(root:Path)->list[str]:
-    errors=[]; script=root/"world_xenofactions.js"; contract=root/"xenoearth-profile.json"
-    for rel in ("README.md","LICENSE","world.js","layer/Rivers.layer",script.name,contract.name):
+    errors=[]; launcher=root/"world_xenofactions.js"; script=root/"world_xenofactions_core.js"; contract=root/"xenoearth-profile.json"
+    for rel in ("README.md","LICENSE","world.js","layer/Rivers.layer",launcher.name,script.name,contract.name,*LAUNCHERS):
         if not (root/rel).is_file(): errors.append(f"missing required file: {rel}")
-    if not script.is_file(): return errors
+    if not script.is_file() or not launcher.is_file(): return errors
     source=script.read_text(encoding="utf-8"); executable=strip_comments(source)
+    launcher_source=launcher.read_text(encoding="utf-8")
+    if "script.param.profile.default=smoke" not in launcher_source: errors.append("default GUI profile must be smoke")
+    if not re.search(r'load\(new java\.io\.File\(scriptDir,\s*["\']world_xenofactions_core\.js["\']\)\.toURI\(\)\.toURL\(\)\);', strip_comments(launcher_source)): errors.append("general launcher must load shared core relative to scriptDir")
+    if "runXenoEarth(selectedProfileName, runPreflightOnly);" not in launcher_source: errors.append("general launcher must invoke selected profile")
     errors.extend(validate_filter_chains(source))
     errors.extend(validate_builtin_layers(source))
     if re.search(r"(?:[A-Za-z]:[\\/]|var\s+path\s*=|/Users/|/home/)",executable): errors.append("script contains a machine-specific absolute path")
-    if "new java.io.File(scriptDir)" not in executable: errors.append("script must derive sourceRoot from scriptDir")
-    if "script.param.profile.default=smoke" not in source: errors.append("default GUI profile must be smoke")
-    if "script.param.preflightOnly.type=boolean" not in source or "if (runPreflightOnly)" not in executable or "API preflight: PASS" not in source: errors.append("preflight-only execution path is required")
+    if "new java.io.File(scriptDir)" not in executable: errors.append("core must derive sourceRoot from scriptDir")
+    if "script.param.preflightOnly.type=boolean" not in launcher_source or "if (runPreflightOnly)" not in executable or "API preflight: PASS" not in source: errors.append("preflight-only execution path is required")
     if not re.search(r"wp\.getMapFormat\(\)\s*\.withId\(LEGACY_ANVIL_MAP_FORMAT\)\s*\.go\(\)",executable): errors.append("legacy Anvil Platform must be resolved with getMapFormat().withId().go()")
     if re.search(r"\.withMapFormat\s*\(\s*LEGACY_ANVIL_MAP_FORMAT\s*\)",executable): errors.append("withMapFormat must not receive the legacy format string")
     platform=re.search(r"(\w+)\s*=\s*wp\.getMapFormat\(\)\s*\.withId\(LEGACY_ANVIL_MAP_FORMAT\)\s*\.go\(\)",executable)
@@ -119,6 +124,9 @@ def validate(root:Path)->list[str]:
     veg=re.search(r"vegetationFilter\s*=\s*(wp\.createFilter\(\).*?\.go\(\))",executable,re.S)
     if not veg or ".onlyOnLand()" not in veg.group(1) or ".exceptOnLayer(" not in veg.group(1): errors.append("vegetation must use legal land-plus-river-layer filter")
     if re.search(r"exceptOnBiome\s*\(\s*(?:0|24|10)\s*\)",executable): errors.append("old repeated ocean-biome exclusions are forbidden")
+    for alias,canonical in PROFILE_ALIASES.items():
+        if not re.search(rf'var\s+PROFILE_ALIASES\s*=\s*\{{[^}}]*{alias}\s*:\s*["\']{canonical}["\']', executable): errors.append(f"profile alias {alias} must resolve to {canonical}")
+        if re.search(rf'\b{alias}\s*:\s*\{{', re.search(r"var\s+PROFILES\s*=\s*\{(.*?)\};", executable, re.S).group(1)): errors.append(f"profile alias {alias} must not have an independent profile object")
     for name,(scale,resize,effective,width,height) in PROFILES.items():
         pattern=rf'{name}:\s*\{{name:"{name}",\s*sourceScale:{scale},\s*resize:{resize},\s*effectiveScale:{effective},\s*width:{width},\s*height:{height}\}}'
         if not re.search(pattern,executable): errors.append(f"profile {name} definition is invalid")
@@ -133,7 +141,23 @@ def validate(root:Path)->list[str]:
         ids={int(x) for x in re.findall(r"\[\s*\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*(\d+)\s*\]",mapping.group(1))}; bad=sorted(ids-ALLOWED_1710_BIOMES)
         if bad: errors.append(f"biome IDs are not valid for 1.7.10: {bad}")
     else: errors.append("BIOME_MAPPINGS table is missing")
-    for scale in (10,40):
+    if not re.search(r"horizontalScaleFactor\s*=\s*config\.sourceScale\s*\*\s*config\.resize\s*/\s*100\.0", executable): errors.append("spawn calculation must include resize")
+    if not re.search(r"minimumX:minimumX,maximumX:maximumX,minimumZ:minimumZ,maximumZ:maximumZ", executable): errors.append("manifest must use validated integer bounds")
+    if "function log(message)" not in source or not all(f'log("[{i}/9]' in source for i in range(1,10)): errors.append("all progress stages must use central log()")
+    without_log=re.sub(r"function\s+log\s*\(message\)\s*\{.*?\n\}", "", executable, count=1, flags=re.S)
+    if "java.lang.System.out.println" in without_log: errors.append("System.out.println must not be used for normal progress")
+    if not re.search(r"catch\s*\(error\)\s*\{\s*java\.lang\.System\.out\.println\(text\);\s*\}", executable): errors.append("log() must have a guarded System.out fallback")
+    if not re.search(r"if\s*\(config\.sourceScale\s*===\s*40\)", executable): errors.append("split GlobCover must be restricted to source scale 40")
+    for filename,profile_name in LAUNCHERS.items():
+        path=root/filename
+        if not path.is_file(): continue
+        text=path.read_text(encoding="utf-8"); code=strip_comments(text)
+        if not re.search(r'new java\.io\.File\(scriptDir,\s*["\']world_xenofactions_core\.js["\']\)', code): errors.append(f"{filename} must load shared core relative to scriptDir")
+        calls=re.findall(r'runXenoEarth\(\s*["\']([^"\']+)["\']', code)
+        if calls != [profile_name]: errors.append(f"{filename} must select exactly {profile_name}")
+        if re.search(r'(?:[A-Za-z]:[\\/]|/Users/|/home/)', code): errors.append(f"{filename} uses an absolute path")
+        if any(token in code for token in ("wp.createWorld", "wp.applyHeightMap", "BIOME_MAPPINGS", "function validateConfiguration")): errors.append(f"{filename} copies generation implementation")
+    for scale in SCALE_DIMENSIONS:
         for rel,dims in required_images(scale).items():
             path=root/rel
             if not path.is_file(): errors.append(f"missing required image: {rel}"); continue

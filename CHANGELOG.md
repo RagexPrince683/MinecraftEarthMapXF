@@ -1,5 +1,15 @@
 # Phase 1 XenoFactions Earth map pipeline
 
+## PR: Add dedicated clean Earth scale launchers
+
+* Refactored WorldPainter generation into one shared core with general and
+  dedicated 1:8000, 1:4000, and 1:2000 launchers.
+* Added canonical scale profiles, the backward-compatible `preview` alias, 20k
+  source validation, resize-aware spawn coordinates, integer bounds, and unique
+  output manifests/projects.
+* Routed progress through the Run Script output, expanded static and mutation
+  tests, and documented profile inputs, scale relationships, and runtime checks.
+
 ## PR: Fix WorldPainter 2.27.0 vegetation layer lookup
 
 * Replaced description-style vegetation layer aliases with WorldPainter's exact

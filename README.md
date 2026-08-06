@@ -1,6 +1,26 @@
 # Minecraft Earth Map
 WorldPainter script and heightmaps for generating an Earth map for Minecraft.
 
+## Clean Minecraft 1.7.10 generation
+
+The WorldPainter 2.27.0 XenoFactions pipeline uses one shared implementation in
+`world_xenofactions_core.js`. Run the general `world_xenofactions.js` script and
+enter a profile name, or run one of the dedicated 1:8000, 1:4000, or 1:2000
+scripts directly. `preview` remains an alias for `earth4000`. See
+[`README_XENOFactions.md`](README_XENOFactions.md) for preflight, export safety,
+and output details.
+
+| Profile | Scale | Source images | Resize | Dimensions |
+|---|---:|---:|---:|---:|
+| `smoke` | 1:16000 | 10k | 25% | 2,688 × 1,344 |
+| `earth8000` | 1:8000 | 10k | 50% | 5,376 × 2,688 |
+| `earth4000` | 1:4000 | 10k | 100% | 10,752 × 5,376 |
+| `earth2000` | 1:2000 | 20k | 100% | 21,504 × 10,752 |
+| `production` | 1:1000 | 40k | 100% | 43,008 × 21,504 |
+
+1:8000 has 1/4 the area of 1:4000; 1:4000 has 1/4 the area of
+1:2000; and 1:2000 has 1/4 the area of 1:1000.
+
 Just run the script "world.js" from "tools" -> "Run Script..." in WorldPainter.
 Be sure to change the "path" variable to match your folder with the script and files. Be sure to place all images, layers and terrain in the right folders.
 

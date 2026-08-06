@@ -103,10 +103,23 @@ function validateConfiguration() {
     if (targetMinecraftVersion !== "1.7.10") fail("targetMinecraftVersion must be 1.7.10");
     if (scale !== 10 && scale !== 20 && scale !== 40) fail("scale must be 10, 20, or 40");
     if (resize <= 0) fail("resize must be greater than zero");
-    var configuredDimensions = {10:[10752,5376], 20:[21504,10752], 40:[43008,21504]}[scale];
-    if ((configuredDimensions[0] * resize / 100) % 512 !== 0 || (configuredDimensions[1] * resize / 100) % 512 !== 0) {
-        fail("resize must keep both output dimensions on 512-block region boundaries");
-    }
+    var configuredDimensions = {
+    10: [10752, 5376],
+    20: [21504, 10752],
+    40: [43008, 21504]
+}[scale];
+
+var configuredOutputWidth = configuredDimensions[0] * resize / 100;
+var configuredOutputHeight = configuredDimensions[1] * resize / 100;
+
+if (configuredOutputWidth !== Math.floor(configuredOutputWidth)
+        || configuredOutputHeight !== Math.floor(configuredOutputHeight)) {
+    fail("resize must produce whole-block output dimensions");
+}
+
+if (configuredOutputWidth % 16 !== 0 || configuredOutputHeight % 16 !== 0) {
+    fail("resize must keep both output dimensions on 16-block chunk boundaries");
+}
     if (groundMaterialMode !== "globecover" && groundMaterialMode !== "biomes") fail("groundMaterialMode must be globecover or biomes");
     if (minimumSurfaceY < 1) fail("minimumSurfaceY must be at least 1");
     if (maximumSurfaceY > 254) fail("maximumSurfaceY must be at most 254");

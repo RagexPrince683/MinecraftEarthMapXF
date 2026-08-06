@@ -4,7 +4,7 @@
  */
 
 // ----------------------------- Configuration ------------------------------
-var path = "C:/WorldPainter/Script/";
+var path = "C:/Users/Owner/Documents/Downloads/bullshit/XFMAP/MinecraftEarthMapXF/";
 var targetMinecraftVersion = "1.7.10";
 var scale = 40;
 var resize = 100;

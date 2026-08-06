@@ -1,5 +1,14 @@
 # Phase 1 XenoFactions Earth map pipeline
 
+## PR: Fix WorldPainter 2.27.0 vegetation layer lookup
+
+* Replaced description-style vegetation layer aliases with WorldPainter's exact
+  built-in layer names and a central registry.
+* Converted vegetation application from positional indexes to checked semantic
+  keys and made preflight report every resolved built-in layer.
+* Extended source validation and mutation coverage for canonical layer names,
+  preflight ordering, and vegetation key integrity.
+
 ## Unreleased
 
 * Fixed the XenoFactions WorldPainter pipeline to select legacy Anvil explicitly,

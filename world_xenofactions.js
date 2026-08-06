@@ -31,6 +31,10 @@ var generateCities=false, generateStreets=false, generateBorders=false, generate
 var allowMinecraftPopulation=false;
 var vegetationSeed=68317010, vegetationDensity=3, maximumVegetationSlope=35;
 var LEGACY_ANVIL_MAP_FORMAT="org.pepsoft.anvil", LOWER_BUILD_LIMIT=0, UPPER_BUILD_LIMIT=256;
+var BUILTIN_LAYER_NAMES = {
+    biomes: "Biomes", frost: "Frost", deciduous: "Deciduous",
+    pine: "Pine", jungle: "Jungle", swamp: "Swamp"
+};
 var CUSTOM_TERRAIN_COMPATIBILITY = {};
 var ALLOWED_BIOME_IDS = {
     0: "Ocean", 1: "Plains", 2: "Desert", 3: "Extreme Hills", 4: "Forest",
@@ -59,6 +63,11 @@ var BIOME_MAPPINGS = [
 
 
 function fail(message) { throw new Error("XenoFactions configuration error: " + message); }
+function resolveBuiltInLayer(name) {
+    var layer=wp.getLayer().withName(name).go();
+    java.lang.System.out.println("Resolved built-in layer: "+name);
+    return layer;
+}
 function requireFile(relativePath) { var f=file(relativePath); if (!f.isFile()) fail("required input is missing: "+f.getAbsolutePath()); return f; }
 function imageSize(relativePath, expectedWidth, expectedHeight) {
     var f=requireFile(relativePath), stream=javax.imageio.ImageIO.createImageInputStream(f);
@@ -102,13 +111,17 @@ function validateConfiguration(config) {
 function buildApiObjects() {
     var objects={};
     objects.mapFormat=wp.getMapFormat().withId(LEGACY_ANVIL_MAP_FORMAT).go();
-    objects.biomesLayer=wp.getLayer().withName("Biomes").go();
-    objects.frostLayer=generateIce ? wp.getLayer().withName("Frost").go() : null;
+    objects.biomesLayer=resolveBuiltInLayer(BUILTIN_LAYER_NAMES.biomes);
+    objects.frostLayer=generateIce ? resolveBuiltInLayer(BUILTIN_LAYER_NAMES.frost) : null;
     objects.riverLayer=generateRivers ? wp.getLayer().fromFile(absolutePath("layer/Rivers.layer")).go() : null;
-    objects.vegetationLayers=[];
+    objects.vegetationLayers={};
     if (generateVegetation) {
-        var names=["Deciduous Forest","Pine Forest","Jungle","Swamp"];
-        for (var n=0;n<names.length;n++) objects.vegetationLayers.push(wp.getLayer().withName(names[n]).go());
+        objects.vegetationLayers={
+            deciduous:resolveBuiltInLayer(BUILTIN_LAYER_NAMES.deciduous),
+            pine:resolveBuiltInLayer(BUILTIN_LAYER_NAMES.pine),
+            jungle:resolveBuiltInLayer(BUILTIN_LAYER_NAMES.jungle),
+            swamp:resolveBuiltInLayer(BUILTIN_LAYER_NAMES.swamp)
+        };
     }
     objects.shallowOceanFilter=wp.createFilter().aboveLevel(DEEP_OCEAN_THRESHOLD).belowLevel(SHALLOW_OCEAN_THRESHOLD).onlyOnBiome(0).go();
     objects.initialDeepOceanFilter=wp.createFilter().aboveLevel(minimumSurfaceY).belowLevel(DEEP_OCEAN_THRESHOLD).onlyOnBiome(0).go();
@@ -147,7 +160,7 @@ function main() {
     java.lang.System.out.println("[7/9] Applying ice");
     if(generateIce){var iceMask=wp.getHeightMap().fromFile(absolutePath("images/Ice"+suffix)).go(); wp.applyHeightMap(iceMask).toWorld(world).scale(resize).shift(westShift,northShift).applyToLayer(api.biomesLayer).fromLevels(1,255).toLevel(10).go(); wp.applyHeightMap(iceMask).toWorld(world).scale(resize).shift(westShift,northShift).applyToLayer(api.frostLayer).fromLevel(0).toLevel(0).fromLevels(1,255).toLevel(1).go();}
     java.lang.System.out.println("[8/9] Applying vegetation");
-    if(generateVegetation){var rules=[[0,[[0,255,255],[200,255,80],[100,255,80],[255,255,0],[200,200,0],[55,200,255],[170,175,255]]],[1,[[0,125,125],[75,80,180],[50,0,135],[150,50,150],[150,100,150]]],[2,[[0,0,255],[0,120,255],[70,170,250],[150,255,150],[100,200,100]]],[0,[[245,165,0],[255,0,255]]],[3,[[90,120,220]]]]; for(var vr=0;vr<rules.length;vr++){wp.checkForInterrupt();var veg=wp.applyHeightMap(biomeMap).toWorld(world).scale(resize).shift(westShift,northShift).applyToLayer(api.vegetationLayers[rules[vr][0]]).withFilter(api.vegetationFilter);for(var c=0;c<rules[vr][1].length;c++){wp.checkForInterrupt();var colour=rules[vr][1][c];veg=veg.fromColour(colour[0],colour[1],colour[2]).toLevel(vegetationDensity);}veg.go();}}
+    if(generateVegetation){var rules=[["deciduous",[[0,255,255],[200,255,80],[100,255,80],[255,255,0],[200,200,0],[55,200,255],[170,175,255]]],["pine",[[0,125,125],[75,80,180],[50,0,135],[150,50,150],[150,100,150]]],["jungle",[[0,0,255],[0,120,255],[70,170,250],[150,255,150],[100,200,100]]],["deciduous",[[245,165,0],[255,0,255]]],["swamp",[[90,120,220]]]];for(var vr=0;vr<rules.length;vr++){wp.checkForInterrupt();var vegetationLayer=api.vegetationLayers[rules[vr][0]];if(vegetationLayer === null || typeof vegetationLayer === "undefined") fail("unknown vegetation layer key: "+rules[vr][0]);var veg=wp.applyHeightMap(biomeMap).toWorld(world).scale(resize).shift(westShift,northShift).applyToLayer(vegetationLayer).withFilter(api.vegetationFilter);for(var c=0;c<rules[vr][1].length;c++){wp.checkForInterrupt();var colour=rules[vr][1][c];veg=veg.fromColour(colour[0],colour[1],colour[2]).toLevel(vegetationDensity);}veg.go();}}
     java.lang.System.out.println("[9/9] Saving project");
     var generated=file("generated"); if(!generated.isDirectory() && !generated.mkdirs()) fail("cannot create output directory: "+generated.getAbsolutePath());
     var outputName="earth_1-"+config.effectiveScale+"_xenofactions_1.7.10_"+config.name+".world";

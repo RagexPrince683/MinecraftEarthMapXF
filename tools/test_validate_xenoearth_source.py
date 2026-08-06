@@ -72,5 +72,24 @@ class SourceTests(unittest.TestCase):
             profile=json.loads((copy/"xenoearth-profile.json").read_text()); profile["seaLevel"]=63; (copy/"xenoearth-profile.json").write_text(json.dumps(profile))
             self.assertTrue(any("seaLevel" in e for e in validator.validate(copy)))
         finally: temp.cleanup()
+    def test_rejects_noncanonical_layer_aliases(self):
+        for alias in ("Deciduous Forest","Pine Forest","Swamp Land"):
+            with self.subTest(alias=alias):
+                errors=validator.validate_with_name_arguments(f'wp.getLayer().withName("{alias}").go();')
+                self.assertTrue(any("forbidden" in error for error in errors))
+    def test_rejects_java_class_names_in_layer_lookup(self):
+        for class_name in ("DeciduousForest","PineForest","SwampLand"):
+            with self.subTest(class_name=class_name):
+                self.assertTrue(validator.validate_with_name_arguments(f'wp.getLayer().withName("{class_name}").go();'))
+    def test_accepts_canonical_layer_lookup_names(self):
+        for name in ("Deciduous","Pine","Jungle","Swamp","Frost"):
+            with self.subTest(name=name):
+                self.assertEqual(validator.validate_with_name_arguments(f'wp.getLayer().withName("{name}").go();'),[])
+    def test_unknown_vegetation_rule_key_fails(self):
+        errors=self.mutation_errors(r'\["swamp",\[\[90,120,220\]\]\]', '["bog",[[90,120,220]]]')
+        self.assertTrue(any("unknown vegetation layer key in rule: bog" in error for error in errors))
+    def test_rejects_positional_vegetation_regression(self):
+        errors=self.mutation_errors(r'\["deciduous",\[\[0,255,255\]', '[0,[[0,255,255]')
+        self.assertTrue(any("positional vegetation" in error or "semantic vegetation" in error for error in errors))
 
 if __name__=="__main__": unittest.main()

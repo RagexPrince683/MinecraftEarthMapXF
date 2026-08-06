@@ -6,7 +6,7 @@
 // ----------------------------- Configuration ------------------------------
 var path = "C:/Users/Owner/Documents/Downloads/bullshit/XFMAP/MinecraftEarthMapXF/";
 var targetMinecraftVersion = "1.7.10";
-var scale = 40;
+var scale = 10;
 var resize = 100;
 var groundMaterialMode = "globecover";
 
@@ -143,12 +143,21 @@ var northShift = -Math.round(268.8 * scale * (resize / 100));
 var heightMap = wp.getHeightMap().fromFile(path + "images/HeightMap" + suffix).go();
 java.lang.System.out.println("Creating project with required map format " + LEGACY_ANVIL_MAP_FORMAT
     + ", build limits " + LOWER_BUILD_LIMIT + ".." + (UPPER_BUILD_LIMIT - 1) + ", and water level " + seaLevel + ".");
-var world = wp.createWorld().fromHeightMap(heightMap).scale(resize)
-    .shift(westShift, northShift).fromLevels(0, 65535)
+var mapFormat = wp.getMapFormat()
+    .withId(LEGACY_ANVIL_MAP_FORMAT)
+    .go();
+
+var world = wp.createWorld()
+    .fromHeightMap(heightMap)
+    .scale(resize)
+    .shift(westShift, northShift)
+    .fromLevels(0, 65535)
     .toLevels(minimumSurfaceY, maximumSurfaceY)
-    .withMapFormat(LEGACY_ANVIL_MAP_FORMAT)
-    .withLowerBuildLimit(LOWER_BUILD_LIMIT).withUpperBuildLimit(UPPER_BUILD_LIMIT)
-    .withWaterLevel(seaLevel).go();
+    .withMapFormat(mapFormat)
+    .withLowerBuildLimit(LOWER_BUILD_LIMIT)
+    .withUpperBuildLimit(UPPER_BUILD_LIMIT)
+    .withWaterLevel(seaLevel)
+    .go();
 heightMap = null;
 world.setSpawnPoint(new java.awt.Point(Math.round(110.5 * scale), -Math.round(11.4 * scale)));
 

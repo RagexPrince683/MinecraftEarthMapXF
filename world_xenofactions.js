@@ -1,53 +1,37 @@
+// script.name=XenoFactions Earth Map
+// script.description=Generate a Minecraft 1.7.10 Earth WorldPainter project.
+// script.param.profile.type=string
+// script.param.profile.default=smoke
+// script.param.profile.displayName=Profile
+// script.param.preflightOnly.type=boolean
+// script.param.preflightOnly.default=false
+// script.param.preflightOnly.displayName=API preflight only
 /*
- * Supported XenoFactions WorldPainter source pipeline (Phase 1).
- * Minecraft 1.7.10 only. The upstream implementation remains in world.js.
+ * XenoFactions Earth pipeline for WorldPainter 2.27.0.
+ * Minecraft 1.7.10 only. world.js remains the unmodified upstream reference.
  */
+var sourceRoot = new java.io.File(scriptDir);
+function file(relativePath) { return new java.io.File(sourceRoot, relativePath); }
+function absolutePath(relativePath) { return file(relativePath).getAbsolutePath(); }
 
-// ----------------------------- Configuration ------------------------------
-var path = "C:/Users/Owner/Documents/Downloads/bullshit/XFMAP/MinecraftEarthMapXF/";
 var targetMinecraftVersion = "1.7.10";
-var scale = 10;
-var resize = 100;
-var groundMaterialMode = "globecover";
-
-var minimumSurfaceY = 1;
-var maximumSurfaceY = 254;
-var seaLevel = 62;
-
-var generateVegetation = true;
-var generateRivers = true;
-var generateIce = true;
-
-var generateCaves = false;
-var generateCaverns = false;
-var generateChasms = false;
-var generateRavines = false;
-var generateOres = false;
-var generateResources = false;
-var generateLava = false;
-var generateStructures = false;
-var generateCities = false;
-var generateStreets = false;
-var generateBorders = false;
-var generatePortals = false;
-var allowMinecraftPopulation = false;
-
-var vegetationSeed = 68317010;
-var vegetationDensity = 3; // Conservative WorldPainter layer intensity (0..15).
-var maximumVegetationSlope = 35;
-
-var LEGACY_ANVIL_MAP_FORMAT = "org.pepsoft.anvil";
-var LOWER_BUILD_LIMIT = 0;
-var UPPER_BUILD_LIMIT = 256;
-
-// Central compatibility registry. No custom terrain is enabled until its entire
-// material stack is safe. Built-in terrain numbers used below are not slots.
-var CUSTOM_TERRAIN_COMPATIBILITY = {
-    // Intentionally empty: see README_XENOFactions.md for inspected replacements.
+var PROFILES = {
+    smoke: {name:"smoke", sourceScale:10, resize:25, effectiveScale:16000, width:2688, height:1344},
+    preview: {name:"preview", sourceScale:10, resize:100, effectiveScale:4000, width:10752, height:5376},
+    production: {name:"production", sourceScale:40, resize:100, effectiveScale:1000, width:43008, height:21504}
 };
-
-// Vanilla 1.7.10 biome IDs used by this profile. Mutated IDs are named using
-// their 1.7.10 names, not modern aliases.
+var selectedProfileName = (typeof profile === "undefined" || profile === null || String(profile).length === 0) ? "smoke" : String(profile);
+var runPreflightOnly = (typeof preflightOnly === "undefined") ? false : Boolean(preflightOnly);
+var groundMaterialMode = "globecover";
+var minimumSurfaceY = 1, maximumSurfaceY = 254, seaLevel = 62;
+var generateVegetation = true, generateRivers = true, generateIce = true;
+var generateCaves=false, generateCaverns=false, generateChasms=false, generateRavines=false;
+var generateOres=false, generateResources=false, generateLava=false, generateStructures=false;
+var generateCities=false, generateStreets=false, generateBorders=false, generatePortals=false;
+var allowMinecraftPopulation=false;
+var vegetationSeed=68317010, vegetationDensity=3, maximumVegetationSlope=35;
+var LEGACY_ANVIL_MAP_FORMAT="org.pepsoft.anvil", LOWER_BUILD_LIMIT=0, UPPER_BUILD_LIMIT=256;
+var CUSTOM_TERRAIN_COMPATIBILITY = {};
 var ALLOWED_BIOME_IDS = {
     0: "Ocean", 1: "Plains", 2: "Desert", 3: "Extreme Hills", 4: "Forest",
     5: "Taiga", 6: "Swampland", 7: "River", 10: "Frozen Ocean",
@@ -73,245 +57,103 @@ var BIOME_MAPPINGS = [
     [0,0,0,0], [255,20,0,2], [255,170,150,17], [255,255,100,130]
 ];
 
-// Thresholds are derived from the configured sea level.
-var SHALLOW_OCEAN_THRESHOLD = seaLevel - Math.round(scale * 0.30);
-var DEEP_OCEAN_THRESHOLD = seaLevel - Math.round(scale * 0.65);
-var RIVER_THRESHOLD = seaLevel + 1;
-var LAND_THRESHOLD = seaLevel;
 
 function fail(message) { throw new Error("XenoFactions configuration error: " + message); }
-function file(relative) { return new java.io.File(path + relative); }
-function requireFile(relative) {
-    var f = file(relative);
-    if (!f.isFile()) fail("required input is missing: " + f.getPath());
-    return f;
+function requireFile(relativePath) { var f=file(relativePath); if (!f.isFile()) fail("required input is missing: "+f.getAbsolutePath()); return f; }
+function imageSize(relativePath, expectedWidth, expectedHeight) {
+    var f=requireFile(relativePath), stream=javax.imageio.ImageIO.createImageInputStream(f);
+    if (stream === null) fail("cannot read image header: "+relativePath);
+    var readers=javax.imageio.ImageIO.getImageReaders(stream);
+    if (!readers.hasNext()) { stream.close(); fail("unsupported image: "+relativePath); }
+    var reader=readers.next(); reader.setInput(stream,true,true);
+    var width=reader.getWidth(0), height=reader.getHeight(0); reader.dispose(); stream.close();
+    if (width !== expectedWidth || height !== expectedHeight) fail(relativePath+" is "+width+" x "+height+"; expected "+expectedWidth+" x "+expectedHeight);
 }
-function imageSize(relative, expectedWidth, expectedHeight) {
-    var f = requireFile(relative);
-    var stream = javax.imageio.ImageIO.createImageInputStream(f);
-    if (stream === null) fail("cannot read image header: " + relative);
-    var readers = javax.imageio.ImageIO.getImageReaders(stream);
-    if (!readers.hasNext()) { stream.close(); fail("unsupported image: " + relative); }
-    var reader = readers.next(); reader.setInput(stream, true, true);
-    var width = reader.getWidth(0), height = reader.getHeight(0);
-    reader.dispose(); stream.close();
-    if (width !== expectedWidth || height !== expectedHeight) {
-        fail(relative + " is " + width + " x " + height + "; expected " + expectedWidth + " x " + expectedHeight);
-    }
+function parseVersion(text) {
+    var match=String(text).match(/^(\d+)\.(\d+)\.(\d+)/);
+    if (!match) fail("cannot parse WorldPainter version: "+text);
+    return [Number(match[1]),Number(match[2]),Number(match[3])];
 }
-function validateConfiguration() {
+function validateVersion(versionText) {
+    var v=parseVersion(versionText);
+    if (v[0] < 2 || (v[0] === 2 && v[1] < 27)) fail("WorldPainter 2.27.0 is required; "+versionText+" is obsolete");
+    if (!(v[0] === 2 && v[1] === 27 && v[2] === 0)) java.lang.System.out.println("WARNING: WorldPainter "+versionText+" is newer or otherwise untested; 2.27.0 is verified.");
+}
+function validateConfiguration(config) {
+    if (!config) fail("unknown profile '"+selectedProfileName+"'; supported profiles: smoke, preview, production");
     if (targetMinecraftVersion !== "1.7.10") fail("targetMinecraftVersion must be 1.7.10");
-    if (scale !== 10 && scale !== 20 && scale !== 40) fail("scale must be 10, 20, or 40");
-    if (resize <= 0) fail("resize must be greater than zero");
-    var configuredDimensions = {
-    10: [10752, 5376],
-    20: [21504, 10752],
-    40: [43008, 21504]
-}[scale];
-
-var configuredOutputWidth = configuredDimensions[0] * resize / 100;
-var configuredOutputHeight = configuredDimensions[1] * resize / 100;
-
-if (configuredOutputWidth !== Math.floor(configuredOutputWidth)
-        || configuredOutputHeight !== Math.floor(configuredOutputHeight)) {
-    fail("resize must produce whole-block output dimensions");
-}
-
-if (configuredOutputWidth % 16 !== 0 || configuredOutputHeight % 16 !== 0) {
-    fail("resize must keep both output dimensions on 16-block chunk boundaries");
-}
-    if (groundMaterialMode !== "globecover" && groundMaterialMode !== "biomes") fail("groundMaterialMode must be globecover or biomes");
-    if (minimumSurfaceY < 1) fail("minimumSurfaceY must be at least 1");
-    if (maximumSurfaceY > 254) fail("maximumSurfaceY must be at most 254");
-    if (minimumSurfaceY >= seaLevel) fail("minimumSurfaceY must be below seaLevel");
-    if (seaLevel >= maximumSurfaceY) fail("seaLevel must be below maximumSurfaceY");
-    if (vegetationDensity < 0 || vegetationDensity > 15) fail("vegetationDensity must be from 0 through 15");
-    if (maximumVegetationSlope < 0 || maximumVegetationSlope > 90) fail("maximumVegetationSlope must be from 0 through 90");
-    for (var i = 0; i < BIOME_MAPPINGS.length; i++) {
-        wp.checkForInterrupt();
-        if (!ALLOWED_BIOME_IDS.hasOwnProperty(BIOME_MAPPINGS[i][3])) fail("unsupported biome ID " + BIOME_MAPPINGS[i][3]);
-    }
-
-    var dims = {10:[10752,5376], 20:[21504,10752], 40:[43008,21504]}[scale];
-    var suffix = String(scale) + "k.png";
-    imageSize("images/HeightMap" + suffix, dims[0], dims[1]);
-    imageSize("images/BiomeMap" + suffix, dims[0], dims[1]);
-    imageSize("images/WaterMap" + suffix, dims[0], dims[1]);
-    imageSize("images/Ice" + suffix, dims[0], dims[1]);
-    if (scale === 40) {
-        imageSize("images/globecover1_40k.png", 21504, 10752);
-        imageSize("images/globecover2a_40k.png", 10752, 10752);
-        imageSize("images/globecover2b_40k.png", 10752, 10752);
-        imageSize("images/globecover3_40k.png", 21504, 10752);
-        imageSize("images/globecover4_40k.png", 21504, 10752);
-    } else imageSize("images/globecover" + suffix, dims[0], dims[1]);
+    if (config.width <= 0 || config.height <= 0 || config.width !== Math.floor(config.width) || config.height !== Math.floor(config.height)) fail("output dimensions must be positive whole blocks");
+    if (config.width % 16 !== 0 || config.height % 16 !== 0) fail("output dimensions must be aligned to 16-block chunks");
+    var base={10:[10752,5376],40:[43008,21504]}[config.sourceScale];
+    if (!base || base[0]*config.resize/100 !== config.width || base[1]*config.resize/100 !== config.height) fail("profile dimensions do not match source scale and resize");
+    if (Math.round(40000/config.sourceScale*100/config.resize) !== config.effectiveScale) fail("profile effective scale is inconsistent");
+    if (minimumSurfaceY !== 1 || maximumSurfaceY !== 254 || seaLevel !== 62) fail("surface limits must be 1..254 with sea level 62");
+    if (vegetationDensity < 0 || vegetationDensity > 15 || maximumVegetationSlope < 0 || maximumVegetationSlope > 90) fail("vegetation settings are out of range");
+    for (var i=0;i<BIOME_MAPPINGS.length;i++) { wp.checkForInterrupt(); if (!ALLOWED_BIOME_IDS.hasOwnProperty(BIOME_MAPPINGS[i][3])) fail("unsupported biome ID "+BIOME_MAPPINGS[i][3]); }
+    var dims=base, suffix=String(config.sourceScale)+"k.png";
+    imageSize("images/HeightMap"+suffix,dims[0],dims[1]); imageSize("images/BiomeMap"+suffix,dims[0],dims[1]);
+    imageSize("images/WaterMap"+suffix,dims[0],dims[1]); imageSize("images/Ice"+suffix,dims[0],dims[1]);
+    if (config.sourceScale === 40) {
+        imageSize("images/globecover1_40k.png",21504,10752); imageSize("images/globecover2a_40k.png",10752,10752);
+        imageSize("images/globecover2b_40k.png",10752,10752); imageSize("images/globecover3_40k.png",21504,10752); imageSize("images/globecover4_40k.png",21504,10752);
+    } else imageSize("images/globecover"+suffix,dims[0],dims[1]);
     if (generateRivers) requireFile("layer/Rivers.layer");
 }
-
-validateConfiguration();
-
-var suffix = String(scale) + "k.png";
-var westShift = -Math.round(537.6 * scale * (resize / 100));
-var northShift = -Math.round(268.8 * scale * (resize / 100));
-var heightMap = wp.getHeightMap().fromFile(path + "images/HeightMap" + suffix).go();
-java.lang.System.out.println("Creating project with required map format " + LEGACY_ANVIL_MAP_FORMAT
-    + ", build limits " + LOWER_BUILD_LIMIT + ".." + (UPPER_BUILD_LIMIT - 1) + ", and water level " + seaLevel + ".");
-var mapFormat = wp.getMapFormat()
-    .withId(LEGACY_ANVIL_MAP_FORMAT)
-    .go();
-
-var world = wp.createWorld()
-    .fromHeightMap(heightMap)
-    .scale(resize)
-    .shift(westShift, northShift)
-    .fromLevels(0, 65535)
-    .toLevels(minimumSurfaceY, maximumSurfaceY)
-    .withMapFormat(mapFormat)
-    .withLowerBuildLimit(LOWER_BUILD_LIMIT)
-    .withUpperBuildLimit(UPPER_BUILD_LIMIT)
-    .withWaterLevel(seaLevel)
-    .go();
-heightMap = null;
-world.setSpawnPoint(new java.awt.Point(Math.round(110.5 * scale), -Math.round(11.4 * scale)));
-
-var biomesLayer = wp.getLayer().withName("Biomes").go();
-var biomeMap = wp.getHeightMap().fromFile(path + "images/BiomeMap" + suffix).go();
-var biomeApplication = wp.applyHeightMap(biomeMap).toWorld(world).scale(resize)
-    .shift(westShift, northShift).applyToLayer(biomesLayer);
-for (var b = 0; b < BIOME_MAPPINGS.length; b++) {
-    wp.checkForInterrupt();
-    var m = BIOME_MAPPINGS[b]; biomeApplication = biomeApplication.fromColour(m[0],m[1],m[2]).toLevel(m[3]);
-}
-biomeApplication.go();
-
-function applyGlobCover(map, shiftX, shiftZ) {
-    wp.applyHeightMap(map).toWorld(world).scale(resize).shift(shiftX, shiftZ).applyToTerrain()
-        .fromColour(0,255,0).toTerrain(1)       // grass
-        .fromColour(255,255,0).toTerrain(5)     // sand (verified replacement for custom mix)
-        .fromColour(255,255,255).toTerrain(40)  // deep snow
-        .fromColour(127,0,0).toTerrain(1)       // podzol forests: safe grass fallback
-        .fromColour(255,0,0).toTerrain(6)       // red sand
-        .fromColour(150,150,150).toTerrain(1)   // rocky mosaic: safe grass fallback
-        .fromColour(255,127,0).toTerrain(5)     // sand/grass mosaic: safe sand fallback
-        .fromColour(0,127,127).toTerrain(1)     // swamp surface
-        .fromColour(0,148,255).toTerrain(5)     // ocean and river bed
-        .go();
-}
-if (groundMaterialMode === "globecover") {
-    if (scale === 40) {
-        var globecoverParts = [
-            ["globecover1_40k.png", westShift, northShift],
-            ["globecover2a_40k.png", 0, northShift],
-            ["globecover2b_40k.png", -westShift / 2, northShift],
-            ["globecover3_40k.png", westShift, 0],
-            ["globecover4_40k.png", 0, 0]
-        ];
-        for (var gp = 0; gp < globecoverParts.length; gp++) {
-            wp.checkForInterrupt();
-            var globecoverMap = wp.getHeightMap().fromFile(path + "images/" + globecoverParts[gp][0]).go();
-            applyGlobCover(globecoverMap, globecoverParts[gp][1], globecoverParts[gp][2]);
-            globecoverMap = null;
-        }
-    } else {
-        var globecoverMap = wp.getHeightMap().fromFile(path + "images/globecover" + suffix).go();
-        applyGlobCover(globecoverMap, westShift, northShift); globecoverMap = null;
+function buildApiObjects() {
+    var objects={};
+    objects.mapFormat=wp.getMapFormat().withId(LEGACY_ANVIL_MAP_FORMAT).go();
+    objects.biomesLayer=wp.getLayer().withName("Biomes").go();
+    objects.frostLayer=generateIce ? wp.getLayer().withName("Frost").go() : null;
+    objects.riverLayer=generateRivers ? wp.getLayer().fromFile(absolutePath("layer/Rivers.layer")).go() : null;
+    objects.vegetationLayers=[];
+    if (generateVegetation) {
+        var names=["Deciduous Forest","Pine Forest","Jungle","Swamp"];
+        for (var n=0;n<names.length;n++) objects.vegetationLayers.push(wp.getLayer().withName(names[n]).go());
     }
+    objects.shallowOceanFilter=wp.createFilter().aboveLevel(DEEP_OCEAN_THRESHOLD).belowLevel(SHALLOW_OCEAN_THRESHOLD).onlyOnBiome(0).go();
+    objects.initialDeepOceanFilter=wp.createFilter().aboveLevel(minimumSurfaceY).belowLevel(DEEP_OCEAN_THRESHOLD).onlyOnBiome(0).go();
+    objects.deepOceanFilter=wp.createFilter().aboveLevel(minimumSurfaceY).belowLevel(DEEP_OCEAN_THRESHOLD).onlyOnBiome(24).go();
+    objects.inlandRiverFilter=wp.createFilter().aboveLevel(RIVER_THRESHOLD).belowLevel(maximumSurfaceY).onlyOnLand().go();
+    objects.oceanRiverMaskOverlapFilter=wp.createFilter().aboveLevel(minimumSurfaceY).belowLevel(seaLevel).go();
+    if (generateVegetation && generateRivers) objects.vegetationFilter=wp.createFilter().aboveLevel(seaLevel).belowLevel(maximumSurfaceY).belowDegrees(maximumVegetationSlope).onlyOnLand().exceptOnLayer(objects.riverLayer).go();
+    else if (generateVegetation) objects.vegetationFilter=wp.createFilter().aboveLevel(seaLevel).belowLevel(maximumSurfaceY).belowDegrees(maximumVegetationSlope).onlyOnLand().go();
+    return objects;
 }
-
-var shallowOceanFilter = wp.createFilter().aboveLevel(DEEP_OCEAN_THRESHOLD).belowLevel(SHALLOW_OCEAN_THRESHOLD).onlyOnBiome(0).go();
-var initialDeepOceanFilter = wp.createFilter().aboveLevel(minimumSurfaceY).belowLevel(DEEP_OCEAN_THRESHOLD).onlyOnBiome(0).go();
-wp.applyHeightMap(biomeMap).toWorld(world).scale(resize).shift(westShift,northShift)
-    .applyToLayer(biomesLayer).withFilter(initialDeepOceanFilter).fromColour(0,0,0).toLevel(24).go();
-var deepOceanFilter = wp.createFilter().aboveLevel(minimumSurfaceY).belowLevel(DEEP_OCEAN_THRESHOLD).onlyOnBiome(24).go();
-// Built-in sand (5) is used for both ocean floor bands; no unverified custom terrain is loaded.
-wp.applyHeightMap(biomeMap).toWorld(world).scale(resize).shift(westShift,northShift)
-    .applyToTerrain().withFilter(shallowOceanFilter).fromColour(0,0,0).toTerrain(5).go();
-
-var riverMask = null;
-var riverLayer = null;
-if (generateRivers) {
-    riverMask = wp.getHeightMap().fromFile(path + "images/WaterMap" + suffix).go();
-    riverLayer = wp.getLayer().fromFile(path + "layer/Rivers.layer").go();
-    var inlandRiverFilter = wp.createFilter().aboveLevel(RIVER_THRESHOLD).belowLevel(maximumSurfaceY)
-        .exceptOnBiome(0).exceptOnBiome(24).exceptOnBiome(10).go();
-    var oceanRiverMaskOverlapFilter = wp.createFilter().aboveLevel(minimumSurfaceY).belowLevel(seaLevel).go();
-    wp.applyHeightMap(riverMask).toWorld(world).scale(resize).shift(westShift,northShift)
-        .applyToLayer(riverLayer).withFilter(inlandRiverFilter).fromLevel(0).toLevel(0).fromLevels(1,255).toLevel(1).go();
-    wp.applyHeightMap(riverMask).toWorld(world).scale(resize).shift(westShift,northShift)
-        .applyToLayer(biomesLayer).withFilter(inlandRiverFilter).fromLevels(1,255).toLevel(7).go();
-    // Explicitly erase ground-cover river data and restore the ocean floor wherever
-    // the mask reaches water, so it cannot raise a water surface across an ocean.
-    wp.applyHeightMap(riverMask).toWorld(world).scale(resize).shift(westShift,northShift)
-        .applyToLayer(riverLayer).withFilter(oceanRiverMaskOverlapFilter).fromLevels(1,255).toLevel(0).go();
-    wp.applyHeightMap(riverMask).toWorld(world).scale(resize).shift(westShift,northShift)
-        .applyToTerrain().withFilter(deepOceanFilter).fromLevels(1,255).toTerrain(5).go();
-    wp.applyHeightMap(riverMask).toWorld(world).scale(resize).shift(westShift,northShift)
-        .applyToTerrain().withFilter(shallowOceanFilter).fromLevels(1,255).toTerrain(5).go();
-    riverMask = null;
+var config, scale, resize, SHALLOW_OCEAN_THRESHOLD, DEEP_OCEAN_THRESHOLD, RIVER_THRESHOLD;
+function main() {
+    java.lang.System.out.println("[1/9] Preflight");
+    config=PROFILES[selectedProfileName]; validateConfiguration(config); scale=config.sourceScale; resize=config.resize;
+    SHALLOW_OCEAN_THRESHOLD=seaLevel-Math.round(scale*0.30); DEEP_OCEAN_THRESHOLD=seaLevel-Math.round(scale*0.65); RIVER_THRESHOLD=seaLevel+1;
+    var wpVersion=String(wp.getVersion()); validateVersion(wpVersion); var api=buildApiObjects();
+    java.lang.System.out.println("WorldPainter version: "+wpVersion+"\nProfile: "+config.name+"\nSource scale: "+scale+"\nResize: "+resize+"%\nEffective scale: 1:"+config.effectiveScale+"\nOutput dimensions: "+config.width+" x "+config.height+"\nMap-format ID: "+LEGACY_ANVIL_MAP_FORMAT+"\nBuild limits: "+LOWER_BUILD_LIMIT+".."+(UPPER_BUILD_LIMIT-1)+"\nWater level: "+seaLevel);
+    if (runPreflightOnly) { java.lang.System.out.println("XenoEarth WorldPainter API preflight: PASS"); return; }
+    var suffix=String(scale)+"k.png", westShift=-Math.round(537.6*scale*(resize/100)), northShift=-Math.round(268.8*scale*(resize/100));
+    java.lang.System.out.println("[2/9] Importing heightmap");
+    var heightMap=wp.getHeightMap().fromFile(absolutePath("images/HeightMap"+suffix)).go();
+    var world=wp.createWorld().fromHeightMap(heightMap).scale(resize).shift(westShift,northShift).fromLevels(0,65535).toLevels(minimumSurfaceY,maximumSurfaceY).withMapFormat(api.mapFormat).withLowerBuildLimit(LOWER_BUILD_LIMIT).withUpperBuildLimit(UPPER_BUILD_LIMIT).withWaterLevel(seaLevel).go();
+    heightMap=null; world.setSpawnPoint(new java.awt.Point(Math.round(110.5*scale),-Math.round(11.4*scale)));
+    java.lang.System.out.println("[3/9] Applying biomes");
+    var biomeMap=wp.getHeightMap().fromFile(absolutePath("images/BiomeMap"+suffix)).go();
+    var biomeApplication=wp.applyHeightMap(biomeMap).toWorld(world).scale(resize).shift(westShift,northShift).applyToLayer(api.biomesLayer);
+    for (var b=0;b<BIOME_MAPPINGS.length;b++) { wp.checkForInterrupt(); var m=BIOME_MAPPINGS[b]; biomeApplication=biomeApplication.fromColour(m[0],m[1],m[2]).toLevel(m[3]); } biomeApplication.go();
+    java.lang.System.out.println("[4/9] Applying surface terrain");
+    function applyGlobCover(map,x,z) { wp.applyHeightMap(map).toWorld(world).scale(resize).shift(x,z).applyToTerrain().fromColour(0,255,0).toTerrain(1).fromColour(255,255,0).toTerrain(5).fromColour(255,255,255).toTerrain(40).fromColour(127,0,0).toTerrain(1).fromColour(255,0,0).toTerrain(6).fromColour(150,150,150).toTerrain(1).fromColour(255,127,0).toTerrain(5).fromColour(0,127,127).toTerrain(1).fromColour(0,148,255).toTerrain(5).go(); }
+    if (scale===40) { var parts=[["globecover1_40k.png",westShift,northShift],["globecover2a_40k.png",0,northShift],["globecover2b_40k.png",-westShift/2,northShift],["globecover3_40k.png",westShift,0],["globecover4_40k.png",0,0]]; for(var gp=0;gp<parts.length;gp++){wp.checkForInterrupt();applyGlobCover(wp.getHeightMap().fromFile(absolutePath("images/"+parts[gp][0])).go(),parts[gp][1],parts[gp][2]);} } else applyGlobCover(wp.getHeightMap().fromFile(absolutePath("images/globecover"+suffix)).go(),westShift,northShift);
+    java.lang.System.out.println("[5/9] Applying oceans");
+    wp.applyHeightMap(biomeMap).toWorld(world).scale(resize).shift(westShift,northShift).applyToLayer(api.biomesLayer).withFilter(api.initialDeepOceanFilter).fromColour(0,0,0).toLevel(24).go();
+    wp.applyHeightMap(biomeMap).toWorld(world).scale(resize).shift(westShift,northShift).applyToTerrain().withFilter(api.shallowOceanFilter).fromColour(0,0,0).toTerrain(5).go();
+    java.lang.System.out.println("[6/9] Applying rivers");
+    if(generateRivers){var riverMask=wp.getHeightMap().fromFile(absolutePath("images/WaterMap"+suffix)).go(); wp.applyHeightMap(riverMask).toWorld(world).scale(resize).shift(westShift,northShift).applyToLayer(api.riverLayer).withFilter(api.inlandRiverFilter).fromLevel(0).toLevel(0).fromLevels(1,255).toLevel(1).go(); wp.applyHeightMap(riverMask).toWorld(world).scale(resize).shift(westShift,northShift).applyToLayer(api.biomesLayer).withFilter(api.inlandRiverFilter).fromLevels(1,255).toLevel(7).go(); wp.applyHeightMap(riverMask).toWorld(world).scale(resize).shift(westShift,northShift).applyToLayer(api.riverLayer).withFilter(api.oceanRiverMaskOverlapFilter).fromLevels(1,255).toLevel(0).go(); wp.applyHeightMap(riverMask).toWorld(world).scale(resize).shift(westShift,northShift).applyToTerrain().withFilter(api.deepOceanFilter).fromLevels(1,255).toTerrain(5).go(); wp.applyHeightMap(riverMask).toWorld(world).scale(resize).shift(westShift,northShift).applyToTerrain().withFilter(api.shallowOceanFilter).fromLevels(1,255).toTerrain(5).go();}
+    java.lang.System.out.println("[7/9] Applying ice");
+    if(generateIce){var iceMask=wp.getHeightMap().fromFile(absolutePath("images/Ice"+suffix)).go(); wp.applyHeightMap(iceMask).toWorld(world).scale(resize).shift(westShift,northShift).applyToLayer(api.biomesLayer).fromLevels(1,255).toLevel(10).go(); wp.applyHeightMap(iceMask).toWorld(world).scale(resize).shift(westShift,northShift).applyToLayer(api.frostLayer).fromLevel(0).toLevel(0).fromLevels(1,255).toLevel(1).go();}
+    java.lang.System.out.println("[8/9] Applying vegetation");
+    if(generateVegetation){var rules=[[0,[[0,255,255],[200,255,80],[100,255,80],[255,255,0],[200,200,0],[55,200,255],[170,175,255]]],[1,[[0,125,125],[75,80,180],[50,0,135],[150,50,150],[150,100,150]]],[2,[[0,0,255],[0,120,255],[70,170,250],[150,255,150],[100,200,100]]],[0,[[245,165,0],[255,0,255]]],[3,[[90,120,220]]]]; for(var vr=0;vr<rules.length;vr++){wp.checkForInterrupt();var veg=wp.applyHeightMap(biomeMap).toWorld(world).scale(resize).shift(westShift,northShift).applyToLayer(api.vegetationLayers[rules[vr][0]]).withFilter(api.vegetationFilter);for(var c=0;c<rules[vr][1].length;c++){wp.checkForInterrupt();var colour=rules[vr][1][c];veg=veg.fromColour(colour[0],colour[1],colour[2]).toLevel(vegetationDensity);}veg.go();}}
+    java.lang.System.out.println("[9/9] Saving project");
+    var generated=file("generated"); if(!generated.isDirectory() && !generated.mkdirs()) fail("cannot create output directory: "+generated.getAbsolutePath());
+    var outputName="earth_1-"+config.effectiveScale+"_xenofactions_1.7.10_"+config.name+".world";
+    var manifest={formatVersion:1,profile:config.name,targetMinecraftVersion:targetMinecraftVersion,sourceScale:scale,resize:resize,effectiveScale:config.effectiveScale,scale:config.effectiveScale,width:config.width,height:config.height,minimumX:-config.width/2,maximumX:config.width/2-1,minimumZ:-config.height/2,maximumZ:config.height/2-1,minimumSurfaceY:minimumSurfaceY,maximumSurfaceY:maximumSurfaceY,seaLevel:seaLevel,projection:"equirectangular",populationMode:"pregenerated",caves:false,ores:false,lava:false,structures:false,vegetation:true};
+    var writer=new java.io.FileWriter(file("generated/xenoearth-profile-"+config.name+".json")); writer.write(JSON.stringify(manifest,null,2)+"\n"); writer.close();
+    java.lang.System.out.println("*** REQUIRED MANUAL EXPORT CHECKLIST: disable Populate, Resources, Caves, Caverns, Chasms, Ravines, Structures, lava, and all unlisted generators; keep bottomless world OFF. ***");
+    wp.saveWorld(world).toFile(absolutePath("generated/"+outputName)).go();
 }
-
-if (generateIce) {
-    var iceMask = wp.getHeightMap().fromFile(path + "images/Ice" + suffix).go();
-    wp.applyHeightMap(iceMask).toWorld(world).scale(resize).shift(westShift,northShift)
-        .applyToLayer(biomesLayer).fromLevels(1,255).toLevel(10).go();
-    var frostLayer = wp.getLayer().withName("Frost").go();
-    wp.applyHeightMap(iceMask).toWorld(world).scale(resize).shift(westShift,northShift)
-        .applyToLayer(frostLayer).fromLevel(0).toLevel(0).fromLevels(1,255).toLevel(1).go();
-    iceMask = null;
-}
-
-// Offline vegetation uses shared, built-in WorldPainter layers. Their exporters
-// perform object placement before Minecraft runs; population remains forbidden.
-if (generateVegetation) {
-    var vegetationFilterBuilder = wp.createFilter().aboveLevel(seaLevel)
-        .belowLevel(maximumSurfaceY).belowDegrees(maximumVegetationSlope)
-        .exceptOnBiome(0).exceptOnBiome(24).exceptOnBiome(10);
-    if (riverLayer !== null) vegetationFilterBuilder = vegetationFilterBuilder.exceptOnLayer(riverLayer);
-    var vegetationFilter = vegetationFilterBuilder.go();
-    var vegetationRules = [
-        ["Deciduous Forest", [[0,255,255],[200,255,80],[100,255,80],[255,255,0],[200,200,0]]], // forest/birch/plains
-        ["Deciduous Forest", [[55,200,255],[170,175,255]]], // roofed forest/swamp
-        ["Pine Forest", [[0,125,125],[75,80,180],[50,0,135],[150,50,150],[150,100,150]]], // taiga/mega/cold
-        ["Jungle", [[0,0,255],[0,120,255],[70,170,250],[150,255,150],[100,200,100]]], // jungle
-        ["Deciduous Forest", [[245,165,0],[255,0,255]]], // savanna (built-in layer is conservative fallback)
-        ["Swamp", [[90,120,220]]] // swamp plants; desert intentionally has no tree layer
-    ];
-    for (var vr = 0; vr < vegetationRules.length; vr++) {
-        wp.checkForInterrupt();
-        var vegetationLayer = wp.getLayer().withName(vegetationRules[vr][0]).go();
-        wp.checkForInterrupt();
-        var veg = wp.applyHeightMap(biomeMap).toWorld(world).scale(resize).shift(westShift,northShift)
-            .applyToLayer(vegetationLayer).withFilter(vegetationFilter);
-        for (var c = 0; c < vegetationRules[vr][1].length; c++) {
-            wp.checkForInterrupt();
-            var colour = vegetationRules[vr][1][c];
-            veg = veg.fromColour(colour[0],colour[1],colour[2]).toLevel(vegetationDensity);
-        }
-        veg.go();
-    }
-}
-
-biomeMap = null; riverMask = null; riverLayer = null;
-
-var denominator = Math.round(40 / scale * 1000);
-var outputName = "earth_1-" + denominator + "_xenofactions_1.7.10" + (resize === 100 ? "" : "_resize-" + resize) + ".world";
-var baseDimensions = {10:[10752,5376], 20:[21504,10752], 40:[43008,21504]}[scale];
-var outputWidth = Math.round(baseDimensions[0] * resize / 100);
-var outputHeight = Math.round(baseDimensions[1] * resize / 100);
-var profile = {
-    formatVersion: 1, targetMinecraftVersion: targetMinecraftVersion,
-    scale: denominator, width: outputWidth, height: outputHeight,
-    minimumX: -outputWidth / 2, maximumX: outputWidth / 2 - 1,
-    minimumZ: -outputHeight / 2, maximumZ: outputHeight / 2 - 1,
-    minimumSurfaceY: minimumSurfaceY, maximumSurfaceY: maximumSurfaceY,
-    seaLevel: seaLevel, projection: "equirectangular", populationMode: "pregenerated",
-    caves: generateCaves, ores: generateOres, lava: generateLava,
-    structures: generateStructures, vegetation: generateVegetation
-};
-var profileWriter = new java.io.FileWriter(path + "xenoearth-profile.json");
-profileWriter.write(JSON.stringify(profile, null, 2) + "\n"); profileWriter.close();
-java.lang.System.out.println("\n*** REQUIRED MANUAL EXPORT CHECKLIST (NOT SCRIPT-CONTROLLABLE) ***");
-java.lang.System.out.println("The project already uses legacy Anvil and build limits 0..255. Disable Populate; Resources; Caves, Caverns and Chasms; Structures; and lava lakes/pockets. Disable any other underground pockets or ravine generator. Keep bottomless world OFF so y=0 exports as bedrock.");
-java.lang.System.out.println("vegetationSeed=" + vegetationSeed + " records reproducibility; this WorldPainter API does not expose a verified per-layer seed setter.");
-wp.saveWorld(world).toFile(path + outputName).go();
-world = null;
+main();

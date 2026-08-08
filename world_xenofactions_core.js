@@ -44,7 +44,6 @@ var ALLOWED_BIOME_IDS = {
     160: "Mega Spruce Taiga", 161: "Mega Spruce Taiga Hills"
 };
 
-
 var BIOME_MAPPINGS = [
     [0,0,255,149], [0,120,255,21], [70,170,250,23], [255,0,0,2],
     [255,150,150,17], [245,165,0,35], [255,220,100,130], [255,255,0,1],
@@ -56,7 +55,6 @@ var BIOME_MAPPINGS = [
     [102,102,102,140], [200,200,200,16], [220,220,220,26], [255,100,0,37],
     [0,0,0,0], [255,20,0,2], [255,170,150,17], [255,255,100,130]
 ];
-var oceanDepthMultiplier = 2.05;
 
 
 function fail(message) { throw new Error("XenoFactions configuration error: " + message); }
@@ -153,59 +151,8 @@ function runXenoEarth(profileName, preflightMode) {
     if (runPreflightOnly) { log("XenoEarth WorldPainter API preflight: PASS"); return; }
     var suffix=String(scale)+"k.png", westShift=-Math.round(537.6*scale*(resize/100)), northShift=-Math.round(268.8*scale*(resize/100));
     log("[2/9] Importing heightmap");
-    var rawHeightMap = wp.getHeightMap()
-    .fromFile(absolutePath("images/HeightMap" + suffix))
-    .go();
-
-/*
- * Convert Minecraft sea level back into the 0..65535 source-height range.
- *
- * Terrain above this value stays unchanged.
- * Terrain below this value is stretched downward.
- */
-var sourceSeaLevel =
-    65535.0
-    * (seaLevel - minimumSurfaceY)
-    / (maximumSurfaceY - minimumSurfaceY);
-
-/*
- * Below sea level:
- *
- * newHeight = seaLevel
- *           - ((seaLevel - oldHeight) * oceanDepthMultiplier)
- *
- * Clamp the result so the deepest terrain reaches Minecraft y=1.
- */
-var belowSeaHeightMap = rawHeightMap
-    .clamped(0.0, sourceSeaLevel)
-    .times(oceanDepthMultiplier)
-    .plus(sourceSeaLevel * (1.0 - oceanDepthMultiplier));
-
-/*
- * Preserve all terrain above sea level exactly.
- */
-var aboveSeaHeightMap = rawHeightMap
-    .minus(sourceSeaLevel)
-    .clamped(0.0, 65535.0 - sourceSeaLevel);
-
-var heightMap = belowSeaHeightMap
-    .plus(aboveSeaHeightMap)
-    .clamped(0.0, 65535.0);
-
-var world = wp.createWorld()
-    .fromHeightMap(heightMap)
-    .scale(resize)
-    .shift(westShift, northShift)
-    .fromLevels(0, 65535)
-    .toLevels(minimumSurfaceY, maximumSurfaceY)
-    .withMapFormat(api.mapFormat)
-    .withLowerBuildLimit(LOWER_BUILD_LIMIT)
-    .withUpperBuildLimit(UPPER_BUILD_LIMIT)
-    .withWaterLevel(seaLevel)
-    .go();
-
-rawHeightMap = null;
-heightMap = null;
+    var heightMap=wp.getHeightMap().fromFile(absolutePath("images/HeightMap"+suffix)).go();
+    var world=wp.createWorld().fromHeightMap(heightMap).scale(resize).shift(westShift,northShift).fromLevels(0,65535).toLevels(minimumSurfaceY,maximumSurfaceY).withMapFormat(api.mapFormat).withLowerBuildLimit(LOWER_BUILD_LIMIT).withUpperBuildLimit(UPPER_BUILD_LIMIT).withWaterLevel(seaLevel).go();
     heightMap=null; world.setSpawnPoint(new java.awt.Point(spawnX, spawnZ));
     log("[3/9] Applying biomes");
     var biomeMap=wp.getHeightMap().fromFile(absolutePath("images/BiomeMap"+suffix)).go();

@@ -49,3 +49,19 @@
   for invalid map-format, filter, path, profile, and output behavior.
 * Expanded the XenoFactions guide with WorldPainter 2.27.0 commands, known failure
   causes, output expectations, and the required visual/export checklist.
+
+## 2026-10-02 01:23 — Centralize Earth terrain processing
+
+* Added a measured source-to-WorldPainter audit and a separate deterministic
+  Python preprocessing stage with explicit thresholds and ignored derived inputs.
+* Replaced resolution-dependent linear height compression and the ocean multiplier
+  with normalized, separate land/ocean piecewise curves, retaining sea level 62,
+  horizontal geography and safe floor/peak headroom.
+* Added discrete climate/surface cleanup, conservative connected-water cleanup,
+  coast/elevation-gated beaches and bounded same-side elevation cleanup. Original
+  rasters, large regional cover and long thin rivers remain intact.
+* Made prepared inputs authoritative for every shared-core terrain application,
+  verified input fingerprints, and restricted Frozen Ocean assignment to water
+  while retaining the ice/Frost footprint and existing vegetation/export rules.
+* Added elevation, component, isolation and topology diagnostics; updated setup
+  documentation and existing source checks for the preprocessing contract.

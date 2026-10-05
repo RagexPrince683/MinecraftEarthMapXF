@@ -2,8 +2,11 @@
 
 This pipeline generates a conservative **Minecraft Forge 1.7.10** WorldPainter
 project from the repository's Earth sources. `world.js` remains the unchanged
-upstream reference. `world_xenofactions_core.js` contains the shared generator;
-the other `world_xenofactions*.js` files are lightweight launchers.
+upstream reference. `tools/preprocess_xenoearth.py` prepares the authoritative
+terrain inputs; `world_xenofactions_core.js` applies them to the project. The
+general and dedicated scale scripts are lightweight launchers; the backup script
+is an unused historical reference. See [the terrain audit](TERRAIN_PIPELINE_AUDIT.md)
+for the complete source-to-project trace, measurements and cleanup tradeoffs.
 
 ## Required WorldPainter version
 
@@ -58,10 +61,12 @@ The canonical bounds and spawn points are:
 | `earth4000` | -5,376..5,375; -2,688..2,687 | 1,105, -114 |
 | `earth2000` | -10,752..10,751; -5,376..5,375 | 2,210, -228 |
 
-The 10k profiles consume `HeightMap10k.png`, `BiomeMap10k.png`,
-`WaterMap10k.png`, `Ice10k.png`, and `globecover10k.png`; `earth2000` uses the
-corresponding complete 20k images. Only `production` uses the split 40k
-GlobCover inputs. Outputs are uniquely named
+Preprocessing consumes `HeightMap10k.png`, `BiomeMap10k.png`,
+`WaterMap10k.png`, `Ice10k.png`, and `globecover10k.png` for the 10k profiles;
+`earth2000` uses the corresponding complete 20k images. Only `production` uses
+the split 40k GlobCover inputs. WorldPainter consumes the five prepared PNGs
+under `generated/terrain/<profile>/`, at 100% with the original profile's
+centered shift. There is no second resize. Outputs are uniquely named
 `earth_1-<scale>_xenofactions_1.7.10_<canonical-profile>.world` and
 `xenoearth-profile-<canonical-profile>.json` under `generated/`.
 
@@ -80,15 +85,28 @@ on demand.
 From a shell with WorldPainter 2.27.0's `wpscript` on `PATH`:
 
 ```bash
+python -m pip install -r tools/terrain-requirements.txt
 python -m unittest discover -s tools -p "test_*.py" -v
 python tools/validate_xenoearth_source.py .
+python tools/preprocess_xenoearth.py --profile=smoke
 wpscript world_xenofactions.js --profile=smoke --preflightOnly
 wpscript world_xenofactions.js --profile=smoke
 ```
 
-API preflight validates configuration, source files and image dimensions; resolves
+Use Python 3.10 or newer with NumPy, Pillow 11.1 or newer and SciPy for preprocessing.
+The Pillow minimum preserves unsigned 16-bit PNG decoding (the
+[11.1 decoder](https://github.com/python-pillow/Pillow/blob/11.1.0/src/PIL/PngImagePlugin.py)
+uses `I;16` for grayscale 16-bit inputs). Python
+does not run inside WorldPainter; the script remains compatible with Java 8
+Nashorn. Preparing another profile uses the same `--profile` value as its
+WorldPainter launcher. `preview` resolves to `earth4000` in both tools. Run
+preprocessing before using the GUI as well.
+
+API preflight validates configuration, source files and image dimensions; verifies
+the prepared manifest and SHA-256 fingerprints of inputs, processing code and
+derived PNGs; resolves
 the legacy Anvil platform; loads Rivers and every built-in layer; constructs every
-selected-profile filter; and exits before loading the main heightmap. Success ends
+selected-profile filter; and exits before constructing the world. Success ends
 with `XenoEarth WorldPainter API preflight: PASS`.
 
 In the GUI, choose **Tools → Run Script…**, select the general launcher and enter
@@ -111,6 +129,14 @@ intact for diagnosis; the script does not broadly catch and obscure WorldPainter
 exceptions.
 
 ## Troubleshooting
+
+**Error:** `prepare terrain first` or `stale or changed terrain input`
+
+Run `python tools/preprocess_xenoearth.py --profile=<profile>` and retry.
+Regenerate after changing source assets,
+`terrain-processing.json`, the core, preprocessing code or the source validator.
+No raw-raster fallback is used. A failed preparation does not publish a complete
+manifest. Keep enough free disk space for the ignored working arrays.
 
 **Error:**
 `No default layer named "Deciduous Forest" exists and no world specified`
@@ -148,13 +174,13 @@ Use `"Deciduous"` and `"Pine"`, not `"Deciduous Forest"` or `"Pine Forest"`.
 
 | Feature | State | Source/export behavior |
 |---|---:|---|
-| Earth terrain | Enabled | `HeightMap…png`, mapped to y=1..254 |
-| Bathymetry | Enabled | Combined 16-bit height source |
-| Oceans | Enabled | Sea level 62; shallow/deep thresholds derive from it |
-| Rivers | Enabled | `WaterMap…png` + verified `Rivers.layer`; inland mask columns receive River biome ID 7, while ocean overlap is erased and its sand floor restored |
-| Climate biomes | Enabled | `BiomeMap…png`; only 1.7.10 IDs |
-| Ice | Enabled | `Ice…png`, Frozen Ocean + built-in Frost |
-| Surface materials | Enabled | GlobCover masks and legacy built-in terrain |
+| Earth terrain | Enabled | Normalized, piecewise processed 16-bit height; safe target floor 4 and peaks 246 |
+| Bathymetry | Enabled | Separate shelf/slope/abyss/trench curve; source ocean topology preserved |
+| Oceans | Enabled | Sea level 62; Deep Ocean floor cutoff 42; shallow sand through y=61 |
+| Rivers | Enabled | Cleaned water mask + unchanged `Rivers.layer`; short tiny inland fragments removed; inland mask receives biome 7; ocean overlap cleared |
+| Climate biomes | Enabled | Discrete majority/component cleanup; only 1.7.10 IDs; real coast gates beach tags |
+| Ice | Enabled | Original sampled ice footprint; Frozen Ocean only underwater, built-in Frost on the full footprint |
+| Surface materials | Enabled | Cleaned GlobCover classes, water-aware sand, bounded coastal beaches, legacy built-in terrain |
 | Trees | Enabled | Shared built-in forest layers, offline |
 | Plants | Enabled | Built-in Jungle/Swamp vegetation and Frost exporters, offline |
 | Caves / Caverns / Chasms / Ravines | **Disabled** | Must also be disabled at export |
@@ -176,6 +202,64 @@ perform their own attachment/slope checks, avoiding objects which float or cut
 deeply. Phase 1 does not claim every optional plant type is present: cactus,
 reeds, lilies, and biome-specific flower mixes require a separately inspected,
 1.7.10-safe plant/object layer before they may be enabled.
+
+The climate input is now cleaned, so removed classification speckles cannot
+request isolated trees. Vegetation rules, density, exporter definitions and slope
+limit are unchanged. Taller mountains can fail the existing slope gate more
+often. Preprocessing is deterministic; the pre-existing WorldPainter seed and
+object-exporter randomness are not changed by this terrain pass.
+
+## Terrain processing and diagnostics
+
+`terrain-processing.json` is the single configuration for vertical curves and
+cleanup thresholds. Height samples are normalized around 61.5*257 using the
+measured resolution-dependent encoding, then mapped separately above and below
+sea level. This is a visually exaggerated Minecraft interpretation, not a metre
+conversion. Lowering sea level would reduce the available ocean depth, so it
+remains 62. Encoded height precision and WorldPainter's fractional storage can
+introduce sub-block rounding around curve anchors.
+
+Climate and surface cleanup require 7 categorical votes in a 3x3 window, or a
+connected component smaller than 12 / 8 columns with at least 60% neighboring
+boundary support for a replacement. Eight-connectivity retains diagonal features.
+Two columns near ocean are protected from that categorical cleanup. No RGB
+colors are interpolated. Inland water components smaller than 6 columns are
+removed only when their span is also below 6 and they are detached from the
+ocean/shore; long thin rivers and mouths remain. No river gaps are bridged.
+
+Beaches occupy up to two landward columns beside the unchanged ocean, require
+surface y<=66, local 3x3 **land** relief<=4, no ice and a connected beach area of at least
+four columns. Cold beaches use existing cold-biome/snow materials. Inland beach
+climate tags are replaced using nearby regional climate, with explicit plains or
+tundra fallback when none lies within 12 columns. Large desert and snow cover
+is preserved. Dry pixels classified as water cover no longer automatically get
+sand outside arid climate; unsupported isolated sand/snow receives a regional
+fallback. Elevation averages only same-side neighbors within 2.5 Y blocks, blends
+by 0.5 and moves a column by at most 0.75 blocks. It cannot cross sea level or
+the safe vertical range, and does not blur ridges with distant valley heights.
+
+A two-column shelf ramp beside lowland coasts softens source-quantization steps:
+only ocean floors already within 14 blocks of sea level and beside land at y<=66
+are eligible. The nearest shallow ocean column rises to at least y=60, the next
+to at least y=58. Land, sea ownership, deep water and high coastal cliffs remain
+unchanged. This local reinterpretation does not stretch or move coastlines.
+
+Generated `diagnostics.json` contains native-source height histograms summarized
+as percentiles, predicted final land/ocean percentiles, median and maximum depths,
+clamp fractions, representative range rectangles, coast-ownership checks,
+isolated-pixel counts and cleanup counts. The smoke profile additionally performs
+an exact global run-length component census; `--census` requests it at larger
+scales. Climate component keys reference the supplied RGB/biome-ID palette.
+Regions crossing tile boundaries are merged for that census, rather than counted
+as separate tile fragments. These are raster measurements, not chunk exports.
+
+Working arrays take approximately 21 bytes per final column: about 76 MB for
+smoke, 1.2 GB for earth4000, 4.9 GB for earth2000 and 19.4 GB for production,
+plus derived PNGs. Arrays are disk-backed and removed on success or failure.
+Pillow still decodes one native image at a time: production's 16-bit height image
+alone is about 1.85 GB uncompressed. OS page-cache use is additional; preprocessing
+does not promise a small fixed total RAM footprint. Tile halos cover cleanup
+radii and component diameters, including across original GlobCover split seams.
 
 ## Mandatory export checklist
 

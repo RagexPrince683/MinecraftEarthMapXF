@@ -19,7 +19,7 @@ def png_dimensions(path:Path)->tuple[int,int]:
     return struct.unpack(">II",header[16:24])
 
 def value(source:str,name:str)->str|None:
-    m=re.search(rf"^var\s+{re.escape(name)}\s*=\s*([^;]+);",source,re.M); return m.group(1).strip() if m else None
+    m=re.search(rf"(?:^|[;}}])\s*var\s+{re.escape(name)}\s*=\s*([^;]+);",source,re.M); return m.group(1).strip() if m else None
 
 def required_images(scale:int)->dict[str,tuple[int,int]]:
     dims=SCALE_DIMENSIONS[scale]; suffix=f"{scale}k.png"; out={f"images/{n}{suffix}":dims for n in ("HeightMap","BiomeMap","WaterMap","Ice")}
@@ -28,6 +28,17 @@ def required_images(scale:int)->dict[str,tuple[int,int]]:
     return out
 
 def strip_comments(source:str)->str: return re.sub(r"/\*.*?\*/|//[^\n]*","",source,flags=re.S)
+
+def compact_source(source:str)->str:
+    """Normalize code spacing without changing whitespace inside string literals."""
+    tokens=re.findall(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|[A-Za-z_$][\w$]*|\d+(?:\.\d+)?|[^\s]',strip_comments(source))
+    out=[]
+    previous=""
+    for token in tokens:
+        if previous and (previous[-1].isalnum() or previous[-1] in "_$") and (token[0].isalnum() or token[0] in "_$"):
+            out.append(" ")
+        out.append(token); previous=token
+    return "".join(out)
 
 def filter_chains(source:str)->list[str]:
     """Extract complete createFilter fluent expressions through their terminal go()."""
@@ -70,7 +81,7 @@ def validate_with_name_arguments(source:str)->list[str]:
     return errors
 
 def validate_builtin_layers(source:str)->list[str]:
-    errors=[]; executable=strip_comments(source)
+    errors=[]; executable=compact_source(source)
     errors.extend(validate_with_name_arguments(executable))
     registry=re.search(r"var\s+BUILTIN_LAYER_NAMES\s*=\s*\{(.*?)\}\s*;",executable,re.S)
     if not registry:
@@ -87,12 +98,12 @@ def validate_builtin_layers(source:str)->list[str]:
     veg_objects=re.findall(r"objects\.vegetationLayers\s*=\s*\{(.*?)\}\s*;",executable,re.S)
     vegetation_keys=set(re.findall(r"\b(deciduous|pine|jungle|swamp)\s*:",veg_objects[-1])) if veg_objects else set()
     if vegetation_keys!=set(BUILTIN_LAYERS)-{"biomes","frost"}: errors.append("vegetationLayers must define all semantic vegetation keys")
-    rules=re.search(r"var\s+rules\s*=\s*\[(.*?)\]\s*;",executable,re.S)
+    rules=re.search(r"var\s+(?:vegetationRules|rules)\s*=\s*\[(.*?)\]\s*;",executable,re.S)
     rule_keys=re.findall(r'\[\s*["\']([^"\']+)["\']\s*,\s*\[',rules.group(1)) if rules else []
     if not rule_keys: errors.append("semantic vegetation rules are required")
     for key in rule_keys:
         if key not in vegetation_keys: errors.append(f"unknown vegetation layer key in rule: {key}")
-    if re.search(r"vegetationLayers\s*\[\s*\d+\s*\]",executable) or re.search(r"var\s+rules\s*=\s*\[\s*\[\s*\d",executable):
+    if re.search(r"vegetationLayers\s*\[\s*\d+\s*\]",executable) or re.search(r"var\s+(?:vegetationRules|rules)\s*=\s*\[\s*\[\s*\d",executable):
         errors.append("positional vegetation layer indexes are forbidden")
     if "unknown vegetation layer key:" not in executable: errors.append("unknown vegetation rule keys must fail clearly")
     build=executable.find("var api=buildApiObjects()")
@@ -105,7 +116,7 @@ def validate(root:Path)->list[str]:
     for rel in ("README.md","LICENSE","world.js","layer/Rivers.layer",launcher.name,script.name,contract.name,*LAUNCHERS):
         if not (root/rel).is_file(): errors.append(f"missing required file: {rel}")
     if not script.is_file() or not launcher.is_file(): return errors
-    source=script.read_text(encoding="utf-8"); executable=strip_comments(source)
+    original_source=script.read_text(encoding="utf-8"); source=compact_source(original_source); executable=source
     launcher_source=launcher.read_text(encoding="utf-8")
     if "script.param.profile.default=smoke" not in launcher_source: errors.append("default GUI profile must be smoke")
     if not re.search(r'load\(new java\.io\.File\(scriptDir,\s*["\']world_xenofactions_core\.js["\']\)\.toURI\(\)\.toURL\(\)\);', strip_comments(launcher_source)): errors.append("general launcher must load shared core relative to scriptDir")
@@ -114,7 +125,7 @@ def validate(root:Path)->list[str]:
     errors.extend(validate_builtin_layers(source))
     if re.search(r"(?:[A-Za-z]:[\\/]|var\s+path\s*=|/Users/|/home/)",executable): errors.append("script contains a machine-specific absolute path")
     if "new java.io.File(scriptDir)" not in executable: errors.append("core must derive sourceRoot from scriptDir")
-    if "script.param.preflightOnly.type=boolean" not in launcher_source or "if (runPreflightOnly)" not in executable or "API preflight: PASS" not in source: errors.append("preflight-only execution path is required")
+    if "script.param.preflightOnly.type=boolean" not in launcher_source or "if(runPreflightOnly)" not in executable or "API preflight: PASS" not in source: errors.append("preflight-only execution path is required")
     if not re.search(r"wp\.getMapFormat\(\)\s*\.withId\(LEGACY_ANVIL_MAP_FORMAT\)\s*\.go\(\)",executable): errors.append("legacy Anvil Platform must be resolved with getMapFormat().withId().go()")
     if re.search(r"\.withMapFormat\s*\(\s*LEGACY_ANVIL_MAP_FORMAT\s*\)",executable): errors.append("withMapFormat must not receive the legacy format string")
     platform=re.search(r"(\w+)\s*=\s*wp\.getMapFormat\(\)\s*\.withId\(LEGACY_ANVIL_MAP_FORMAT\)\s*\.go\(\)",executable)
@@ -136,7 +147,7 @@ def validate(root:Path)->list[str]:
     if not re.search(r'absolutePath\("generated/"\+outputName\)',executable) or not re.search(r'file\("generated/xenoearth-profile-',executable): errors.append("generated projects and manifests must be written under generated/")
     for flag in DISABLED_FLAGS:
         if not re.search(rf"var\s+[^;]*\b{flag}\s*=\s*false",source): errors.append(f"{flag} must be false")
-    mapping=re.search(r"var BIOME_MAPPINGS\s*=\s*\[(.*?)\n\];",source,re.S)
+    mapping=re.search(r"var BIOME_MAPPINGS\s*=\s*\[(.*?)\];",source,re.S)
     if mapping:
         ids={int(x) for x in re.findall(r"\[\s*\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*(\d+)\s*\]",mapping.group(1))}; bad=sorted(ids-ALLOWED_1710_BIOMES)
         if bad: errors.append(f"biome IDs are not valid for 1.7.10: {bad}")
@@ -144,10 +155,20 @@ def validate(root:Path)->list[str]:
     if not re.search(r"horizontalScaleFactor\s*=\s*config\.sourceScale\s*\*\s*config\.resize\s*/\s*100\.0", executable): errors.append("spawn calculation must include resize")
     if not re.search(r"minimumX:minimumX,maximumX:maximumX,minimumZ:minimumZ,maximumZ:maximumZ", executable): errors.append("manifest must use validated integer bounds")
     if "function log(message)" not in source or not all(f'log("[{i}/9]' in source for i in range(1,10)): errors.append("all progress stages must use central log()")
-    without_log=re.sub(r"function\s+log\s*\(message\)\s*\{.*?\n\}", "", executable, count=1, flags=re.S)
-    if "java.lang.System.out.println" in without_log: errors.append("System.out.println must not be used for normal progress")
+    if executable.count("java.lang.System.out.println")!=1: errors.append("System.out.println must only occur in the central log fallback")
     if not re.search(r"catch\s*\(error\)\s*\{\s*java\.lang\.System\.out\.println\(text\);\s*\}", executable): errors.append("log() must have a guarded System.out fallback")
     if not re.search(r"if\s*\(config\.sourceScale\s*===\s*40\)", executable): errors.append("split GlobCover must be restricted to source scale 40")
+    if value(original_source,"applicationResize")!="100": errors.append("processed inputs must be applied at 100% with no second resize")
+    if "loadProcessedTerrain(config)" not in executable or "verifyTerrainFingerprint" not in executable:
+        errors.append("processed terrain contract and fingerprints are required")
+    for asset in ("height","biome","terrain","water","ice"):
+        if f'processedAssetPath(terrain,"{asset}")' not in executable:
+            errors.append(f"processed {asset} must be the authoritative generation input")
+    if re.search(r"\.scale\(resize\)|deepenOceanBitmapInPlace|oceanDepthMultiplier",executable):
+        errors.append("obsolete raw height transform or second resize is still used")
+    ice=re.search(r"wp\.applyHeightMap\(iceMask\)(.*?)\.toLevel\(10\)",executable,re.S)
+    if not ice or ".withFilter(api.oceanRiverMaskOverlapFilter)" not in ice[1]:
+        errors.append("ice must not assign Frozen Ocean to land")
     for filename,profile_name in LAUNCHERS.items():
         path=root/filename
         if not path.is_file(): continue

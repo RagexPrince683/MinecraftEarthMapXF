@@ -91,16 +91,8 @@ var maximumSurfaceY = 254;
 var seaLevel = 62;
 
 
-/*
- * Ocean depth multiplier.
- *
- * 1.0 = original heightmap depth.
- * 2.0 = approximately twice the original ocean depth.
- * 2.05 = pushes an existing ~30 block Mariana Trench depth to about y=1.
- *
- * Terrain at or above sea level is left unchanged.
- */
-var oceanDepthMultiplier = 2.05;
+// Derived inputs are prepared once on the existing final grid.
+var applicationResize = 100;
 
 
 var generateVegetation = true;
@@ -243,191 +235,96 @@ function fail(message) {
 
 
 /*
- * Deepen only the part of the 16-bit bitmap below sea level.
- *
- * This function modifies the BufferedImage backing the existing
- * BitmapHeightMap.
- *
- * This is important because WorldPainter 2.27.0's
- * ImportHeightMapOp.fromHeightMap() casts the supplied HeightMap to
- * BitmapHeightMap.
- *
- * Using HeightMap.plus(), minus(), times(), or clamped() produces wrapper
- * HeightMap types and causes a ClassCastException.
- *
- * Modifying this BitmapHeightMap in place avoids that problem.
+ * Require a complete, current preprocessing bundle before constructing a world.
+ * Hashes cover original assets, processing configuration/code and derived PNGs.
+ * Never silently fall back to the obsolete raw-raster terrain path.
  */
-function deepenOceanBitmapInPlace(heightMap) {
-    var DataBuffer =
-        Java.type("java.awt.image.DataBuffer");
-
-    var LookupOp =
-        Java.type("java.awt.image.LookupOp");
-
-    var ShortLookupTable =
-        Java.type("java.awt.image.ShortLookupTable");
-
-    var ShortArray =
-        Java.type("short[]");
-
-
-    if (heightMap.getBitDepth() !== 16) {
-        fail(
-            "ocean depth transform requires a 16-bit heightmap; got "
-            + heightMap.getBitDepth()
-            + " bits"
-        );
-    }
-
-
-    if (heightMap.isFloatingPoint()) {
-        fail(
-            "ocean depth transform does not support floating-point heightmaps"
-        );
-    }
-
-
-    if (heightMap.isSigned()) {
-        fail(
-            "ocean depth transform requires an unsigned 16-bit heightmap"
-        );
-    }
-
-
-    var image = heightMap.getImage();
-    var raster = image.getRaster();
-
-
-    if (raster.getTransferType() !== DataBuffer.TYPE_USHORT) {
-        fail(
-            "ocean depth transform requires TYPE_USHORT image data; "
-            + "transfer type is "
-            + raster.getTransferType()
-        );
-    }
-
-
-    /*
-     * WorldPainter later maps:
-     *
-     * source 0     -> y=1
-     * source 65535 -> y=254
-     *
-     * Find the source value corresponding to Minecraft sea level y=62.
-     */
-    var sourceSeaLevel = Math.round(
-        65535.0
-        * (seaLevel - minimumSurfaceY)
-        / (maximumSurfaceY - minimumSurfaceY)
+function verifyTerrainFingerprint(entry) {
+    var input = requireFile(entry.path);
+    var digest = java.security.MessageDigest.getInstance("SHA-256");
+    var stream = new java.io.BufferedInputStream(
+        new java.io.FileInputStream(input)
     );
+    var buffer = new (Java.type("byte[]"))(131072);
 
-
-    log(
-        "Ocean depth transform:"
-        + "\n  Multiplier: "
-        + oceanDepthMultiplier
-        + "\n  Minecraft sea level: "
-        + seaLevel
-        + "\n  Source sea level: "
-        + sourceSeaLevel
-    );
-
-
-    /*
-     * Build a lookup table for every possible unsigned 16-bit value.
-     *
-     * Above sea level:
-     *
-     *     new = old
-     *
-     * Below sea level:
-     *
-     *     new = sea - ((sea - old) * multiplier)
-     *
-     * Values below zero clamp to zero.
-     *
-     * Source zero later maps to Minecraft y=1.
-     */
-    var lookupValues =
-        new ShortArray(65536);
-
-
-    for (
-        var value = 0;
-        value < 65536;
-        value++
-    ) {
-        var transformed = value;
-
-
-        if (value < sourceSeaLevel) {
-            transformed = Math.round(
-                sourceSeaLevel
-                - (
-                    (sourceSeaLevel - value)
-                    * oceanDepthMultiplier
-                )
-            );
-
-
-            if (transformed < 0) {
-                transformed = 0;
-            }
+    try {
+        var count;
+        while ((count = stream.read(buffer)) !== -1) {
+            wp.checkForInterrupt();
+            digest.update(buffer, 0, count);
         }
-
-
-        if (transformed > 65535) {
-            transformed = 65535;
-        }
-
-
-        /*
-         * Java short values are signed.
-         *
-         * The underlying USHORT raster uses the same 16 data bits, so values
-         * from 32768 through 65535 must be represented as negative Java shorts.
-         */
-        if (transformed > 32767) {
-            lookupValues[value] =
-                transformed - 65536;
-        } else {
-            lookupValues[value] =
-                transformed;
-        }
+    } finally {
+        stream.close();
     }
 
-
-    var lookupTable =
-        new ShortLookupTable(
-            0,
-            lookupValues
-        );
-
-
-    var lookupOperation =
-        new LookupOp(
-            lookupTable,
-            null
-        );
+    var actual = String(new java.math.BigInteger(1, digest.digest()).toString(16));
+    while (actual.length < 64) {
+        actual = "0" + actual;
+    }
+    if (actual !== entry.sha256) {
+        fail("stale or changed terrain input: " + entry.path
+            + "; rerun tools/preprocess_xenoearth.py --profile=" + config.name);
+    }
+}
 
 
-    /*
-     * Apply the transform directly to the existing writable raster.
-     *
-     * The BitmapHeightMap object itself is retained.
-     */
-    lookupOperation.filter(
-        raster,
-        raster
+function processedAssetPath(terrain, name) {
+    return absolutePath(terrain.assets[name].path);
+}
+
+
+function loadProcessedTerrain(config) {
+    var manifestRelativePath = "generated/terrain/" + config.name + "/manifest.json";
+    if (!file(manifestRelativePath).isFile()) {
+        fail("prepare terrain first: python tools/preprocess_xenoearth.py --profile="
+            + config.name);
+    }
+    var text = new java.lang.String(
+        java.nio.file.Files.readAllBytes(file(manifestRelativePath).toPath()),
+        java.nio.charset.StandardCharsets.UTF_8
     );
-
-
-    log(
-        "Ocean depth transform complete."
-    );
-
-
-    return heightMap;
+    var terrain = JSON.parse(String(text));
+    if (terrain.formatVersion !== 1 || terrain.profile !== config.name
+            || terrain.width !== config.width || terrain.height !== config.height
+            || terrain.sourceScale !== config.sourceScale
+            || terrain.sourceResize !== config.resize
+            || terrain.effectiveScale !== config.effectiveScale
+            || terrain.seaLevel !== seaLevel
+            || !(terrain.minimumFloorY > minimumSurfaceY
+                && terrain.minimumFloorY < seaLevel
+                && terrain.maximumPeakY > seaLevel
+                && terrain.maximumPeakY < maximumSurfaceY)
+            || !(terrain.deepOceanFloorY > terrain.minimumFloorY
+                && terrain.deepOceanFloorY < terrain.shallowOceanFloorY
+                && terrain.shallowOceanFloorY < seaLevel)) {
+        fail("invalid processed terrain contract: " + manifestRelativePath);
+    }
+    var expectedSources = requiredAssetNames(config).concat([
+        "world_xenofactions_core.js", "terrain-processing.json",
+        "tools/preprocess_xenoearth.py", "tools/validate_xenoearth_source.py"
+    ]);
+    if (!terrain.sources || terrain.sources.length !== expectedSources.length) {
+        fail("incomplete terrain source fingerprints: " + manifestRelativePath);
+    }
+    for (var i = 0; i < expectedSources.length; i++) {
+        if (terrain.sources[i].path !== expectedSources[i]) {
+            fail("unexpected terrain source fingerprint: " + manifestRelativePath);
+        }
+        verifyTerrainFingerprint(terrain.sources[i]);
+    }
+    var names = ["height", "biome", "terrain", "water", "ice"];
+    for (var j = 0; j < names.length; j++) {
+        var name = names[j];
+        var entry = terrain.assets[name];
+        if (!entry || entry.path !== "generated/terrain/" + config.name
+                + "/" + name + ".png") {
+            fail("missing or misplaced processed asset: " + name);
+        }
+        verifyTerrainFingerprint(entry);
+        imageSize(entry.path, config.width, config.height);
+    }
+    log("Verified processed terrain: " + manifestRelativePath);
+    return terrain;
 }
 
 
@@ -724,13 +621,6 @@ function validateConfiguration(config) {
     ) {
         fail(
             "surface limits must be 1..254 with sea level 62"
-        );
-    }
-
-
-    if (oceanDepthMultiplier <= 0) {
-        fail(
-            "oceanDepthMultiplier must be greater than zero"
         );
     }
 
@@ -1117,18 +1007,10 @@ function runXenoEarth(
     }
 
 
-    SHALLOW_OCEAN_THRESHOLD =
-        seaLevel
-        - Math.round(
-            scale * 0.30
-        );
+    var terrain = loadProcessedTerrain(config);
 
-
-    DEEP_OCEAN_THRESHOLD =
-        seaLevel
-        - Math.round(
-            scale * 0.65
-        );
+    SHALLOW_OCEAN_THRESHOLD = terrain.shallowOceanFloorY;
+    DEEP_OCEAN_THRESHOLD = terrain.deepOceanFloorY;
 
 
     RIVER_THRESHOLD =
@@ -1189,8 +1071,9 @@ function runXenoEarth(
         + (UPPER_BUILD_LIMIT - 1)
         + "\nWater level: "
         + seaLevel
-        + "\nOcean depth multiplier: "
-        + oceanDepthMultiplier
+        + "\nPrepared vertical range: "
+        + terrain.minimumFloorY + ".." + terrain.maximumPeakY
+        + "\nPrepared terrain directory: generated/terrain/" + config.name
     );
 
 
@@ -1201,11 +1084,6 @@ function runXenoEarth(
 
         return;
     }
-
-
-    var suffix =
-        String(scale)
-        + "k.png";
 
 
     var westShift =
@@ -1235,23 +1113,9 @@ function runXenoEarth(
     var heightMap =
         wp.getHeightMap()
             .fromFile(
-                absolutePath(
-                    "images/HeightMap"
-                    + suffix
-                )
+                processedAssetPath(terrain, "height")
             )
             .go();
-
-
-    if (
-        oceanDepthMultiplier
-        !== 1.0
-    ) {
-        heightMap =
-            deepenOceanBitmapInPlace(
-                heightMap
-            );
-    }
 
 
     var world =
@@ -1260,7 +1124,7 @@ function runXenoEarth(
                 heightMap
             )
             .scale(
-                resize
+                applicationResize
             )
             .shift(
                 westShift,
@@ -1311,10 +1175,7 @@ function runXenoEarth(
     var biomeMap =
         wp.getHeightMap()
             .fromFile(
-                absolutePath(
-                    "images/BiomeMap"
-                    + suffix
-                )
+                processedAssetPath(terrain, "biome")
             )
             .go();
 
@@ -1327,7 +1188,7 @@ function runXenoEarth(
             world
         )
         .scale(
-            resize
+            applicationResize
         )
         .shift(
             westShift,
@@ -1376,182 +1237,22 @@ function runXenoEarth(
     );
 
 
-    function applyGlobCover(
-        map,
-        shiftX,
-        shiftZ
-    ) {
-        wp.applyHeightMap(
-            map
-        )
-        .toWorld(
-            world
-        )
-        .scale(
-            resize
-        )
-        .shift(
-            shiftX,
-            shiftZ
-        )
-        .applyToTerrain()
-
-        .fromColour(
-            0,
-            255,
-            0
-        )
-        .toTerrain(1)
-
-        .fromColour(
-            255,
-            255,
-            0
-        )
-        .toTerrain(5)
-
-        .fromColour(
-            255,
-            255,
-            255
-        )
-        .toTerrain(40)
-
-        .fromColour(
-            127,
-            0,
-            0
-        )
-        .toTerrain(1)
-
-        .fromColour(
-            255,
-            0,
-            0
-        )
-        .toTerrain(6)
-
-        .fromColour(
-            150,
-            150,
-            150
-        )
-        .toTerrain(1)
-
-        .fromColour(
-            255,
-            127,
-            0
-        )
-        .toTerrain(5)
-
-        .fromColour(
-            0,
-            127,
-            127
-        )
-        .toTerrain(1)
-
-        .fromColour(
-            0,
-            148,
-            255
-        )
-        .toTerrain(5)
-
+    var surfaceMap = wp.getHeightMap()
+        .fromFile(processedAssetPath(terrain, "terrain"))
         .go();
+    var surfaceApplication = wp.applyHeightMap(surfaceMap)
+        .toWorld(world)
+        .scale(applicationResize)
+        .shift(westShift, northShift)
+        .applyToTerrain();
+    var surfaceTerrainIds = [1, 5, 6, 40];
+    for (var surfaceIndex = 0; surfaceIndex < surfaceTerrainIds.length; surfaceIndex++) {
+        wp.checkForInterrupt();
+        var surfaceId = surfaceTerrainIds[surfaceIndex];
+        surfaceApplication = surfaceApplication.fromLevel(surfaceId).toTerrain(surfaceId);
     }
-
-
-    if (scale === 40) {
-        var globecoverParts = [
-            [
-                "globecover1_40k.png",
-                westShift,
-                northShift
-            ],
-
-            [
-                "globecover2a_40k.png",
-                0,
-                northShift
-            ],
-
-            [
-                "globecover2b_40k.png",
-                -westShift / 2,
-                northShift
-            ],
-
-            [
-                "globecover3_40k.png",
-                westShift,
-                0
-            ],
-
-            [
-                "globecover4_40k.png",
-                0,
-                0
-            ]
-        ];
-
-
-        for (
-            var globecoverPartIndex = 0;
-            globecoverPartIndex < globecoverParts.length;
-            globecoverPartIndex++
-        ) {
-            wp.checkForInterrupt();
-
-
-            var globecoverPart =
-                globecoverParts[
-                    globecoverPartIndex
-                ];
-
-
-            var globecoverMap =
-                wp.getHeightMap()
-                    .fromFile(
-                        absolutePath(
-                            "images/"
-                            + globecoverPart[0]
-                        )
-                    )
-                    .go();
-
-
-            applyGlobCover(
-                globecoverMap,
-                globecoverPart[1],
-                globecoverPart[2]
-            );
-
-
-            globecoverMap = null;
-        }
-    } else {
-        var globecoverMap =
-            wp.getHeightMap()
-                .fromFile(
-                    absolutePath(
-                        "images/globecover"
-                        + suffix
-                    )
-                )
-                .go();
-
-
-        applyGlobCover(
-            globecoverMap,
-            westShift,
-            northShift
-        );
-
-
-        globecoverMap = null;
-    }
+    surfaceApplication.go();
+    surfaceMap = null;
 
 
     /*
@@ -1569,7 +1270,7 @@ function runXenoEarth(
         world
     )
     .scale(
-        resize
+        applicationResize
     )
     .shift(
         westShift,
@@ -1599,7 +1300,7 @@ function runXenoEarth(
         world
     )
     .scale(
-        resize
+        applicationResize
     )
     .shift(
         westShift,
@@ -1632,10 +1333,7 @@ function runXenoEarth(
         var riverMask =
             wp.getHeightMap()
                 .fromFile(
-                    absolutePath(
-                        "images/WaterMap"
-                        + suffix
-                    )
+                    processedAssetPath(terrain, "water")
                 )
                 .go();
 
@@ -1647,7 +1345,7 @@ function runXenoEarth(
             world
         )
         .scale(
-            resize
+            applicationResize
         )
         .shift(
             westShift,
@@ -1682,7 +1380,7 @@ function runXenoEarth(
             world
         )
         .scale(
-            resize
+            applicationResize
         )
         .shift(
             westShift,
@@ -1711,7 +1409,7 @@ function runXenoEarth(
             world
         )
         .scale(
-            resize
+            applicationResize
         )
         .shift(
             westShift,
@@ -1740,7 +1438,7 @@ function runXenoEarth(
             world
         )
         .scale(
-            resize
+            applicationResize
         )
         .shift(
             westShift,
@@ -1767,7 +1465,7 @@ function runXenoEarth(
             world
         )
         .scale(
-            resize
+            applicationResize
         )
         .shift(
             westShift,
@@ -1803,10 +1501,7 @@ function runXenoEarth(
         var iceMask =
             wp.getHeightMap()
                 .fromFile(
-                    absolutePath(
-                        "images/Ice"
-                        + suffix
-                    )
+                    processedAssetPath(terrain, "ice")
                 )
                 .go();
 
@@ -1818,7 +1513,7 @@ function runXenoEarth(
             world
         )
         .scale(
-            resize
+            applicationResize
         )
         .shift(
             westShift,
@@ -1826,6 +1521,9 @@ function runXenoEarth(
         )
         .applyToLayer(
             api.biomesLayer
+        )
+        .withFilter(
+            api.oceanRiverMaskOverlapFilter
         )
         .fromLevels(
             1,
@@ -1844,7 +1542,7 @@ function runXenoEarth(
             world
         )
         .scale(
-            resize
+            applicationResize
         )
         .shift(
             westShift,
@@ -1975,7 +1673,7 @@ function runXenoEarth(
                     world
                 )
                 .scale(
-                    resize
+                    applicationResize
                 )
                 .shift(
                     westShift,
@@ -2104,6 +1802,14 @@ function runXenoEarth(
 
         seaLevel:
             seaLevel,
+
+        terrainProcessing: {
+            manifest: "generated/terrain/" + config.name + "/manifest.json",
+            diagnostics: "generated/terrain/" + config.name + "/diagnostics.json",
+            minimumFloorY: terrain.minimumFloorY,
+            maximumPeakY: terrain.maximumPeakY,
+            deepOceanFloorY: terrain.deepOceanFloorY
+        },
 
         projection:
             "equirectangular",

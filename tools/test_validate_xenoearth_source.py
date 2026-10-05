@@ -34,7 +34,10 @@ class SourceTests(unittest.TestCase):
     def fixture(self,mutate=None):
         root=Path(__file__).resolve().parents[1]; temp=tempfile.TemporaryDirectory(); copy=Path(temp.name)
         for name in ("README.md","LICENSE","world.js","world_xenofactions.js","world_xenofactions_core.js","world_xenofactions_1_8000.js","world_xenofactions_1_4000.js","world_xenofactions_1_2000.js","xenoearth-profile.json"):
-            (copy/name).write_bytes((root/name).read_bytes())
+            if name == "world_xenofactions_core.js":
+                (copy/name).write_text(validator.compact_source((root/name).read_text(encoding="utf-8")),encoding="utf-8")
+            else:
+                (copy/name).write_bytes((root/name).read_bytes())
         (copy/"layer").mkdir(); (copy/"layer/Rivers.layer").write_bytes(b"test")
         for scale in validator.SCALE_DIMENSIONS:
             for rel,dims in validator.required_images(scale).items():
@@ -51,15 +54,15 @@ class SourceTests(unittest.TestCase):
         errors=self.mutation_errors(r"\.withMapFormat\(api\.mapFormat\)",".withMapFormat(LEGACY_ANVIL_MAP_FORMAT)")
         self.assertTrue(any("must not receive" in e for e in errors))
     def test_rejects_windows_path(self):
-        errors=self.mutation_errors(r"var sourceRoot = new java\.io\.File\(scriptDir\);",'var sourceRoot = new java.io.File("C:/Users/example/Downloads/map");')
+        errors=self.mutation_errors(r"var sourceRoot=new java\.io\.File\(scriptDir\);",'var sourceRoot=new java.io.File("C:/Users/example/Downloads/map");')
         self.assertTrue(any("absolute path" in e for e in errors))
     def test_profiles_have_expected_values(self):
-        source=(Path(__file__).resolve().parents[1]/"world_xenofactions_core.js").read_text()
+        source=validator.compact_source((Path(__file__).resolve().parents[1]/"world_xenofactions_core.js").read_text())
         for name,(_,_,effective,width,height) in validator.PROFILES.items():
             with self.subTest(profile=name):
-                self.assertIn(f'{name}: {{name:"{name}"',source); self.assertIn(f'effectiveScale:{effective}',source); self.assertIn(f'width:{width}, height:{height}',source)
+                self.assertIn(f'{name}:{{name:"{name}"',source); self.assertIn(f'effectiveScale:{effective}',source); self.assertIn(f'width:{width},height:{height}',source)
     def test_effective_scale_output_naming(self):
-        source=(Path(__file__).resolve().parents[1]/"world_xenofactions_core.js").read_text()
+        source=validator.compact_source((Path(__file__).resolve().parents[1]/"world_xenofactions_core.js").read_text())
         self.assertIn('"earth_1-"+config.effectiveScale',source); self.assertIn('effectiveScale:config.effectiveScale',source)
     def test_default_profile_is_smoke(self):
         temp,copy=self.fixture()
@@ -68,7 +71,7 @@ class SourceTests(unittest.TestCase):
             self.assertTrue(any("default GUI profile" in e for e in validator.validate(copy)))
         finally: temp.cleanup()
     def test_rejects_region_boundary_regression(self):
-        source=(Path(__file__).resolve().parents[1]/"world_xenofactions_core.js").read_text(); self.assertNotIn("% 512",source); self.assertIn("% 16",source)
+        source=validator.compact_source((Path(__file__).resolve().parents[1]/"world_xenofactions_core.js").read_text()); self.assertNotIn("%512",source); self.assertIn("%16",source)
     def test_bad_contract_fails(self):
         temp,copy=self.fixture()
         try:
@@ -96,21 +99,21 @@ class SourceTests(unittest.TestCase):
         self.assertTrue(any("positional vegetation" in error or "semantic vegetation" in error for error in errors))
 
     def test_preview_aliases_canonical_earth4000(self):
-        source=(Path(__file__).resolve().parents[1]/"world_xenofactions_core.js").read_text()
+        source=validator.compact_source((Path(__file__).resolve().parents[1]/"world_xenofactions_core.js").read_text())
         self.assertRegex(source, r'PROFILE_ALIASES\s*=\s*\{preview:"earth4000"\}')
-        profiles=re.search(r"var PROFILES = \{(.*?)\};",source,re.S).group(1)
+        profiles=re.search(r"var PROFILES=\{(.*?)\};",source,re.S).group(1)
         self.assertNotRegex(profiles,r"\bpreview\s*:\s*\{")
 
     def test_rejects_earth8000_wrong_resize(self):
-        errors=self.mutation_errors(r'earth8000: \{name:"earth8000", sourceScale:10, resize:50', 'earth8000: {name:"earth8000", sourceScale:10, resize:100')
+        errors=self.mutation_errors(r'earth8000:\{name:"earth8000",sourceScale:10,resize:50', 'earth8000:{name:"earth8000",sourceScale:10,resize:100')
         self.assertTrue(any("profile earth8000 definition is invalid" in e for e in errors))
 
     def test_rejects_earth2000_wrong_source(self):
-        errors=self.mutation_errors(r'earth2000: \{name:"earth2000", sourceScale:20', 'earth2000: {name:"earth2000", sourceScale:10')
+        errors=self.mutation_errors(r'earth2000:\{name:"earth2000",sourceScale:20', 'earth2000:{name:"earth2000",sourceScale:10')
         self.assertTrue(any("profile earth2000 definition is invalid" in e for e in errors))
 
     def test_rejects_spawn_without_resize(self):
-        errors=self.mutation_errors(r'var horizontalScaleFactor = config\.sourceScale \* config\.resize / 100\.0;', 'var horizontalScaleFactor = config.sourceScale;')
+        errors=self.mutation_errors(r'var horizontalScaleFactor=config\.sourceScale\*config\.resize/100\.0;', 'var horizontalScaleFactor=config.sourceScale;')
         self.assertTrue(any("spawn calculation must include resize" in e for e in errors))
 
     def test_earth2000_requires_every_20k_asset(self):

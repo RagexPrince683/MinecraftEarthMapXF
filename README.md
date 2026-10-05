@@ -10,6 +10,20 @@ scripts directly. `preview` remains an alias for `earth4000`. See
 [`README_XENOFactions.md`](README_XENOFactions.md) for preflight, export safety,
 and output details.
 
+First prepare the selected profile with Python 3.10+:
+
+```bash
+python -m pip install -r tools/terrain-requirements.txt
+python tools/preprocess_xenoearth.py --profile=smoke
+```
+
+The centralized terrain pass preserves horizontal geography, cleans discrete
+climate/surface/water noise and applies separate land/ocean elevation curves.
+WorldPainter uses the prepared bundle and rejects missing or stale inputs.
+See [the measured pipeline audit](TERRAIN_PIPELINE_AUDIT.md) for causes,
+configuration tradeoffs and diagnostic scope. The upstream `world.js` path below
+remains a historical reference and does not use this terrain pass.
+
 | Profile | Scale | Source images | Resize | Dimensions |
 |---|---:|---:|---:|---:|
 | `smoke` | 1:16000 | 10k | 25% | 2,688 × 1,344 |

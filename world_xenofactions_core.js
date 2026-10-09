@@ -95,7 +95,7 @@ var seaLevel = 62;
 var applicationResize = 100;
 
 
-var generateVegetation = true;
+var vegetation;
 var generateRivers = true;
 var generateIce = true;
 
@@ -116,9 +116,7 @@ var generatePortals = false;
 
 var allowMinecraftPopulation = false;
 
-var vegetationSeed = 68317010;
-var vegetationDensity = 3;
-var maximumVegetationSlope = 35;
+load(file("world_xenofactions_vegetation.js").toURI().toURL());
 
 var LEGACY_ANVIL_MAP_FORMAT = "org.pepsoft.anvil";
 
@@ -128,11 +126,7 @@ var UPPER_BUILD_LIMIT = 256;
 
 var BUILTIN_LAYER_NAMES = {
     biomes: "Biomes",
-    frost: "Frost",
-    deciduous: "Deciduous",
-    pine: "Pine",
-    jungle: "Jungle",
-    swamp: "Swamp"
+    frost: "Frost"
 };
 
 
@@ -301,8 +295,15 @@ function loadProcessedTerrain(config) {
     }
     var expectedSources = requiredAssetNames(config).concat([
         "world_xenofactions_core.js", "terrain-processing.json",
-        "tools/preprocess_xenoearth.py", "tools/validate_xenoearth_source.py"
+        "tools/preprocess_xenoearth.py", "tools/validate_xenoearth_source.py",
+        "vegetation.json", "world_xenofactions_vegetation.js", "tools/vegetation.py"
     ]);
+    if (vegetation.suppressInfrastructureMasks) {
+        expectedSources = expectedSources.concat([
+            "images/Cities" + config.sourceScale + "k.png",
+            "images/street" + config.sourceScale + "k.png"
+        ]);
+    }
     if (!terrain.sources || terrain.sources.length !== expectedSources.length) {
         fail("incomplete terrain source fingerprints: " + manifestRelativePath);
     }
@@ -312,7 +313,7 @@ function loadProcessedTerrain(config) {
         }
         verifyTerrainFingerprint(terrain.sources[i]);
     }
-    var names = ["height", "biome", "terrain", "water", "ice"];
+    var names = ["height", "biome", "terrain", "water", "ice", "trees", "plants"];
     for (var j = 0; j < names.length; j++) {
         var name = names[j];
         var entry = terrain.assets[name];
@@ -625,18 +626,6 @@ function validateConfiguration(config) {
     }
 
 
-    if (
-        vegetationDensity < 0
-        || vegetationDensity > 15
-        || maximumVegetationSlope < 0
-        || maximumVegetationSlope > 90
-    ) {
-        fail(
-            "vegetation settings are out of range"
-        );
-    }
-
-
     for (
         var i = 0;
         i < BIOME_MAPPINGS.length;
@@ -778,33 +767,7 @@ function buildApiObjects() {
             : null;
 
 
-    objects.vegetationLayers = {};
-
-
-    if (generateVegetation) {
-        objects.vegetationLayers = {
-            deciduous:
-                resolveBuiltInLayer(
-                    BUILTIN_LAYER_NAMES.deciduous
-                ),
-
-            pine:
-                resolveBuiltInLayer(
-                    BUILTIN_LAYER_NAMES.pine
-                ),
-
-            jungle:
-                resolveBuiltInLayer(
-                    BUILTIN_LAYER_NAMES.jungle
-                ),
-
-            swamp:
-                resolveBuiltInLayer(
-                    BUILTIN_LAYER_NAMES.swamp
-                )
-        };
-    }
-
+    objects.vegetationLayers = vegetation.enabled ? XenoVegetation.build(vegetation) : [];
 
     objects.shallowOceanFilter =
         wp.createFilter()
@@ -865,43 +828,6 @@ function buildApiObjects() {
             .go();
 
 
-    if (
-        generateVegetation
-        && generateRivers
-    ) {
-        objects.vegetationFilter =
-            wp.createFilter()
-                .aboveLevel(
-                    seaLevel
-                )
-                .belowLevel(
-                    maximumSurfaceY
-                )
-                .belowDegrees(
-                    maximumVegetationSlope
-                )
-                .onlyOnLand()
-                .exceptOnLayer(
-                    objects.riverLayer
-                )
-                .go();
-    } else if (generateVegetation) {
-        objects.vegetationFilter =
-            wp.createFilter()
-                .aboveLevel(
-                    seaLevel
-                )
-                .belowLevel(
-                    maximumSurfaceY
-                )
-                .belowDegrees(
-                    maximumVegetationSlope
-                )
-                .onlyOnLand()
-                .go();
-    }
-
-
     return objects;
 }
 
@@ -949,6 +875,8 @@ function runXenoEarth(
             selectedProfileName
         ];
 
+
+    vegetation = XenoVegetation.configuration();
 
     validateConfiguration(
         config
@@ -1118,39 +1046,8 @@ function runXenoEarth(
             .go();
 
 
-    var world =
-        wp.createWorld()
-            .fromHeightMap(
-                heightMap
-            )
-            .scale(
-                applicationResize
-            )
-            .shift(
-                westShift,
-                northShift
-            )
-            .fromLevels(
-                0,
-                65535
-            )
-            .toLevels(
-                minimumSurfaceY,
-                maximumSurfaceY
-            )
-            .withMapFormat(
-                api.mapFormat
-            )
-            .withLowerBuildLimit(
-                LOWER_BUILD_LIMIT
-            )
-            .withUpperBuildLimit(
-                UPPER_BUILD_LIMIT
-            )
-            .withWaterLevel(
-                seaLevel
-            )
-            .go();
+    var world = XenoVegetation.importWorld(heightMap, api.mapFormat, westShift, northShift, vegetation);
+    XenoVegetation.configureExport(world);
 
 
     heightMap = null;
@@ -1579,145 +1476,9 @@ function runXenoEarth(
     );
 
 
-    if (generateVegetation) {
-        var vegetationRules = [
-            [
-                "deciduous",
-                [
-                    [0, 255, 255],
-                    [200, 255, 80],
-                    [100, 255, 80],
-                    [255, 255, 0],
-                    [200, 200, 0],
-                    [55, 200, 255],
-                    [170, 175, 255]
-                ]
-            ],
-
-            [
-                "pine",
-                [
-                    [0, 125, 125],
-                    [75, 80, 180],
-                    [50, 0, 135],
-                    [150, 50, 150],
-                    [150, 100, 150]
-                ]
-            ],
-
-            [
-                "jungle",
-                [
-                    [0, 0, 255],
-                    [0, 120, 255],
-                    [70, 170, 250],
-                    [150, 255, 150],
-                    [100, 200, 100]
-                ]
-            ],
-
-            [
-                "deciduous",
-                [
-                    [245, 165, 0],
-                    [255, 0, 255]
-                ]
-            ],
-
-            [
-                "swamp",
-                [
-                    [90, 120, 220]
-                ]
-            ]
-        ];
-
-
-        for (
-            var vegetationRuleIndex = 0;
-            vegetationRuleIndex < vegetationRules.length;
-            vegetationRuleIndex++
-        ) {
-            wp.checkForInterrupt();
-
-
-            var vegetationRule =
-                vegetationRules[
-                    vegetationRuleIndex
-                ];
-
-
-            var vegetationLayer =
-                api.vegetationLayers[
-                    vegetationRule[0]
-                ];
-
-
-            if (
-                vegetationLayer === null
-                || typeof vegetationLayer
-                    === "undefined"
-            ) {
-                fail(
-                    "unknown vegetation layer key: "
-                    + vegetationRule[0]
-                );
-            }
-
-
-            var vegetationApplication =
-                wp.applyHeightMap(
-                    biomeMap
-                )
-                .toWorld(
-                    world
-                )
-                .scale(
-                    applicationResize
-                )
-                .shift(
-                    westShift,
-                    northShift
-                )
-                .applyToLayer(
-                    vegetationLayer
-                )
-                .withFilter(
-                    api.vegetationFilter
-                );
-
-
-            for (
-                var colourIndex = 0;
-                colourIndex < vegetationRule[1].length;
-                colourIndex++
-            ) {
-                wp.checkForInterrupt();
-
-
-                var colour =
-                    vegetationRule[1][
-                        colourIndex
-                    ];
-
-
-                vegetationApplication =
-                    vegetationApplication
-                        .fromColour(
-                            colour[0],
-                            colour[1],
-                            colour[2]
-                        )
-                        .toLevel(
-                            vegetationDensity
-                        );
-            }
-
-
-            vegetationApplication.go();
-        }
-    }
-
+    XenoVegetation.apply(world, vegetation, api.vegetationLayers,
+        processedAssetPath(terrain, "trees"), processedAssetPath(terrain, "plants"),
+        westShift, northShift);
 
     biomeMap = null;
 
@@ -1829,8 +1590,8 @@ function runXenoEarth(
         structures:
             false,
 
-        vegetation:
-            true
+        vegetation: vegetation.enabled,
+        vegetationConfiguration: vegetation
     };
 
 

@@ -6,7 +6,9 @@
 // script.param.preflightOnly.type=boolean
 // script.param.preflightOnly.default=false
 // script.param.preflightOnly.displayName=API preflight only
-var selectedProfileName = (typeof profile === "undefined" || profile === null || String(profile).length === 0) ? "smoke" : String(profile);
-var runPreflightOnly = (typeof preflightOnly === "undefined") ? false : Boolean(preflightOnly);
+var selectedProfileName = (typeof profile === "undefined" || profile === null || String(profile).length === 0)
+    ? ((typeof params !== "undefined" && params.containsKey("profile")) ? String(params.get("profile")) : "smoke") : String(profile);
+var runPreflightOnly = (typeof preflightOnly === "undefined")
+    ? (typeof params !== "undefined" && String(params.get("preflightOnly")) === "true") : Boolean(preflightOnly);
 load(new java.io.File(scriptDir, "world_xenofactions_core.js").toURI().toURL());
 runXenoEarth(selectedProfileName, runPreflightOnly);

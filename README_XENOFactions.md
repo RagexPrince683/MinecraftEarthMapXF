@@ -24,9 +24,8 @@ returned by `getMapFormat().withId(...).go()`, each filter has no more than one
 `onlyOn...` and one `exceptOn...` condition, and all operation builders terminate
 with `go()` at the point required by that API.
 
-> This development environment did not contain WorldPainter or `wpscript`, so the
-> real 2.27.0 preflight and smoke generation remain owner-run checks. The Python
-> source validator is not represented as a substitute for those runtime checks.
+The Python source validator checks the source contract. Use the WorldPainter
+preflight, sample export and Anvil scan below to check the installed exporter.
 
 ## Profiles and outputs
 
@@ -134,7 +133,8 @@ exceptions.
 
 Run `python tools/preprocess_xenoearth.py --profile=<profile>` and retry.
 Regenerate after changing source assets,
-`terrain-processing.json`, the core, preprocessing code or the source validator.
+`terrain-processing.json`, `vegetation.json`, the core, vegetation implementation,
+preprocessing code or the source validator.
 No raw-raster fallback is used. A failed preparation does not publish a complete
 manifest. Keep enough free disk space for the ignored working arrays.
 
@@ -181,33 +181,70 @@ Use `"Deciduous"` and `"Pine"`, not `"Deciduous Forest"` or `"Pine Forest"`.
 | Climate biomes | Enabled | Discrete majority/component cleanup; only 1.7.10 IDs; real coast gates beach tags |
 | Ice | Enabled | Original sampled ice footprint; Frozen Ocean only underwater, built-in Frost on the full footprint |
 | Surface materials | Enabled | Cleaned GlobCover classes, water-aware sand, bounded coastal beaches, legacy built-in terrain |
-| Trees | Enabled | Shared built-in forest layers, offline |
-| Plants | Enabled | Built-in Jungle/Swamp vegetation and Frost exporters, offline |
+| Trees | Enabled | Native custom object layers; natural leaf decay; biome-specific species and density |
+| Plants | Enabled | Native custom Plants layers; grass, ferns, flowers, mushrooms, desert shrubs/cactus |
 | Caves / Caverns / Chasms / Ravines | **Disabled** | Must also be disabled at export |
 | Ores / Resources | **Disabled** | No ore image or layer is loaded |
 | Lava | **Disabled** | Must also be disabled at export |
 | Structures | **Disabled** | Must also be disabled at export |
-| Cities / Streets / Borders / Portals | **Disabled** | Assets preserved, never loaded |
+| Cities / Streets / Borders / Portals | **Disabled** | No objects generated; existing city/street masks suppress vegetation |
 | Minecraft population | **Disabled** | Never mark chunks for Populate |
 
-The vegetation filter uses WorldPainter 2.27.0's `onlyOnLand()` condition, excludes the Rivers layer when rivers are enabled,
-and limits placement to surfaces above `seaLevel` and slopes no steeper than
-`maximumVegetationSlope` (default 35 degrees). A separate legal filter without
-`exceptOnLayer()` is constructed when rivers are disabled. Gentle river-bank land
-and actual swamp land remain eligible. Vegetation rules group compatible climates to control memory: deciduous/birch/
-roofed/plains, taiga/mega-taiga/cold terrain, jungle, savanna, and swamp. Desert,
-beach, permanent snow, and ocean columns intentionally receive no normal-tree
-rule; ice receives Frost. Intensities are conservative. Built-in object exporters
-perform their own attachment/slope checks, avoiding objects which float or cut
-deeply. Phase 1 does not claim every optional plant type is present: cactus,
-reeds, lilies, and biome-specific flower mixes require a separately inspected,
-1.7.10-safe plant/object layer before they may be enabled.
+### Vegetation configuration
 
-The climate input is now cleaned, so removed classification speckles cannot
-request isolated trees. Vegetation rules, density, exporter definitions and slope
-limit are unchanged. Taller mountains can fail the existing slope gate more
-often. Preprocessing is deterministic; the pre-existing WorldPainter seed and
-object-exporter randomness are not changed by this terrain pass.
+`vegetation.json` controls vegetation for every scale launcher. After editing it,
+rerun preprocessing and generate a new project. Vegetation is already present in
+the exported save; Minecraft Populate must stay off. Keep **make all leaves
+persistent / leaves persist OFF** when exporting. Intact trees have naturally
+supported leaves; removing their supporting logs allows normal game leaf decay.
+Existing saves require a new export to receive these changes.
+
+| Profile | Biomes | Vegetation |
+|---|---|---|
+| Forest / birch / roofed | 4,132 / 27 / 29 | Oak-birch / birch / dark oak; moderate ground cover |
+| Plains | 1,129 | Grass, sparse flowers, very sparse oak trees |
+| Taiga | 5,30,32,160,161 | Spruce, ferns and grass |
+| Jungle | 21,22,23,149,151 | Denser jungle trees, low shrubs, tall grass and ferns |
+| Savanna | 35,36 | Widely spaced acacias, sparse grass |
+| Arid | 2,17,37,130 | Sparse dead shrubs and cactus on sand; no trees |
+| Swamp | 6,134 | Oak-like swamp trees, grass, ferns, blue orchids, occasional mushrooms |
+| Alpine | 3,131 | Sparse spruce and ground cover, fading with height |
+| Tundra | 12,13,140 | Very sparse grass on exposed grass substrate; no trees |
+| Coast / water | 16,26 / 0,7,10,24 | No terrestrial vegetation |
+
+Controls include `enabled`, `seed`, `densityMultiplier`, `treeDensityMultiplier`,
+each profile's `treeCoverage` and `plantCoverage`, weighted species/plant mixes,
+`maximumTreeSlopeDegrees` (35), `alpineFalloffStartY` (120), `maximumTreeY` (175),
+`maximumPlantY` (200), `treeCoastBuffer` (4 blocks), and `treeGrid` (8 blocks).
+`treeCoverage` is the fraction of grid cells requesting a tree; `plantCoverage`
+is the fraction of eligible columns requesting a plant. Exporter collision and
+substrate rules may reject candidates. Multipliers of zero disable their category.
+
+Placement uses the final cleaned biome, terrain, water and ice data. It avoids
+water/ice, unsuitable substrates, steep tree positions, beaches, and low coastal
+tree positions. Tree positions are spaced and jittered; ground cover forms gentle
+patches. The seed pins both placement and native WorldPainter export randomness,
+so regenerating/exporting unchanged inputs with the same WorldPainter version
+gives the same vegetation. Tree shapes use only legacy vanilla logs and natural
+leaves; reeds/lilies and modern plants are not included.
+
+`suppressInfrastructureMasks` (true) uses the existing `Cities<scale>k.png` and
+`street<scale>k.png` solely to exclude vegetation, without enabling their object
+layers. `infrastructureBuffer` defaults to 3 blocks. Thin mask features survive
+smaller exports. These masks are required and fingerprinted when suppression is
+enabled. They describe mapped infrastructure, not future in-game player buildings.
+
+For a small sample covering all profiles, run:
+
+```bash
+python tools/vegetation.py --sample
+wpscript world_xenofactions_vegetation_sample.js
+python tools/export-validation/vegetation_scan.py generated/vegetation-sample/export/XenoEarthVegetationSample --size 1664 128
+```
+
+The sample saves its editable project and export under
+`generated/vegetation-sample/`. See `tools/export-validation/README.md` for the
+scan's scope and the final in-game checklist.
 
 ## Terrain processing and diagnostics
 
@@ -263,10 +300,11 @@ radii and component diameters, including across original GlobCover split seams.
 
 ## Mandatory export checklist
 
-The repository's inspected script API calls cover world creation, height mapping,
-filters, layers, terrain application, spawn, and project save. No verified calls
-were found for the following export settings. Consequently the script prints this
-checklist prominently and **the source project alone is not an export validation**:
+The script sets Populate off, removes Populate/Resources/Caves/Caverns/Chasms
+layer data, disables default resources and generated structures, disables the
+goodies chest, keeps bedrock, and leaves natural leaf persistence unchanged.
+Check the following settings when exporting, especially after manually editing
+the project. **The source project alone is not an export validation**:
 
 The map format, build limits, and water level are already set by the script and are
 therefore not manual checklist items.

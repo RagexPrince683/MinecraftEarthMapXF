@@ -10,7 +10,7 @@ PROFILE_ALIASES={"preview":"earth4000"}
 LAUNCHERS={"world_xenofactions_1_8000.js":"earth8000","world_xenofactions_1_4000.js":"earth4000","world_xenofactions_1_2000.js":"earth2000"}
 ALLOWED_1710_BIOMES={0,1,2,3,4,5,6,7,10,12,13,16,17,21,22,23,24,26,27,29,30,32,35,36,37,129,130,131,132,134,140,149,151,160,161}
 DISABLED_FLAGS=("generateCaves","generateCaverns","generateChasms","generateRavines","generateOres","generateResources","generateLava","generateStructures","generateCities","generateStreets","generateBorders","generatePortals","allowMinecraftPopulation")
-BUILTIN_LAYERS={"biomes":"Biomes","frost":"Frost","deciduous":"Deciduous","pine":"Pine","jungle":"Jungle","swamp":"Swamp"}
+BUILTIN_LAYERS={"biomes":"Biomes","frost":"Frost"}
 FORBIDDEN_LAYER_NAMES={"Deciduous Forest","Pine Forest","Swamp Land","DeciduousForest","PineForest","SwampLand"}
 
 def png_dimensions(path:Path)->tuple[int,int]:
@@ -95,17 +95,10 @@ def validate_builtin_layers(source:str)->list[str]:
         errors.append("successful built-in layer lookups must be printed")
     # Executable lookup sites must use the registry rather than duplicate literals.
     if re.search(r'\.withName\s*\(\s*["\']',executable): errors.append("withName() built-in lookups must use BUILTIN_LAYER_NAMES")
-    veg_objects=re.findall(r"objects\.vegetationLayers\s*=\s*\{(.*?)\}\s*;",executable,re.S)
-    vegetation_keys=set(re.findall(r"\b(deciduous|pine|jungle|swamp)\s*:",veg_objects[-1])) if veg_objects else set()
-    if vegetation_keys!=set(BUILTIN_LAYERS)-{"biomes","frost"}: errors.append("vegetationLayers must define all semantic vegetation keys")
-    rules=re.search(r"var\s+(?:vegetationRules|rules)\s*=\s*\[(.*?)\]\s*;",executable,re.S)
-    rule_keys=re.findall(r'\[\s*["\']([^"\']+)["\']\s*,\s*\[',rules.group(1)) if rules else []
-    if not rule_keys: errors.append("semantic vegetation rules are required")
-    for key in rule_keys:
-        if key not in vegetation_keys: errors.append(f"unknown vegetation layer key in rule: {key}")
-    if re.search(r"vegetationLayers\s*\[\s*\d+\s*\]",executable) or re.search(r"var\s+(?:vegetationRules|rules)\s*=\s*\[\s*\[\s*\d",executable):
-        errors.append("positional vegetation layer indexes are forbidden")
-    if "unknown vegetation layer key:" not in executable: errors.append("unknown vegetation rule keys must fail clearly")
+    if 'XenoVegetation.build(vegetation)' not in executable:
+        errors.append("native vegetation layers must resolve during preflight")
+    if 'vegetationRules' in executable or 'BUILTIN_LAYER_NAMES.deciduous' in executable:
+        errors.append("superseded forest rules must not remain authoritative")
     build=executable.find("var api=buildApiObjects()")
     passed=executable.find("XenoEarth WorldPainter API preflight: PASS")
     if build<0 or passed<0 or passed<build: errors.append("preflight PASS must occur after all layer lookups")
@@ -113,7 +106,7 @@ def validate_builtin_layers(source:str)->list[str]:
 
 def validate(root:Path)->list[str]:
     errors=[]; launcher=root/"world_xenofactions.js"; script=root/"world_xenofactions_core.js"; contract=root/"xenoearth-profile.json"
-    for rel in ("README.md","LICENSE","world.js","layer/Rivers.layer",launcher.name,script.name,contract.name,*LAUNCHERS):
+    for rel in ("README.md","LICENSE","world.js","layer/Rivers.layer",launcher.name,script.name,contract.name,"vegetation.json","world_xenofactions_vegetation.js","tools/vegetation.py",*LAUNCHERS):
         if not (root/rel).is_file(): errors.append(f"missing required file: {rel}")
     if not script.is_file() or not launcher.is_file(): return errors
     original_source=script.read_text(encoding="utf-8"); source=compact_source(original_source); executable=source
@@ -127,13 +120,13 @@ def validate(root:Path)->list[str]:
     if "new java.io.File(scriptDir)" not in executable: errors.append("core must derive sourceRoot from scriptDir")
     if "script.param.preflightOnly.type=boolean" not in launcher_source or "if(runPreflightOnly)" not in executable or "API preflight: PASS" not in source: errors.append("preflight-only execution path is required")
     if not re.search(r"wp\.getMapFormat\(\)\s*\.withId\(LEGACY_ANVIL_MAP_FORMAT\)\s*\.go\(\)",executable): errors.append("legacy Anvil Platform must be resolved with getMapFormat().withId().go()")
-    if re.search(r"\.withMapFormat\s*\(\s*LEGACY_ANVIL_MAP_FORMAT\s*\)",executable): errors.append("withMapFormat must not receive the legacy format string")
+    if 'XenoVegetation.importWorld(heightMap,LEGACY_ANVIL_MAP_FORMAT' in executable: errors.append("native import must not receive the legacy format string")
     platform=re.search(r"(\w+)\s*=\s*wp\.getMapFormat\(\)\s*\.withId\(LEGACY_ANVIL_MAP_FORMAT\)\s*\.go\(\)",executable)
-    if not platform or not re.search(rf"\.withMapFormat\s*\(\s*(?:\w+\.)?{re.escape(platform.group(1))}\s*\)",executable): errors.append("resolved Platform variable must be passed to withMapFormat")
+    if not platform or 'XenoVegetation.importWorld(heightMap,api.mapFormat,westShift,northShift,vegetation)' not in executable: errors.append("resolved Platform must be passed to seeded native import")
     inland=re.search(r"inlandRiverFilter\s*=\s*(wp\.createFilter\(\).*?\.go\(\))",executable,re.S)
     if not inland or ".onlyOnLand()" not in inland.group(1) or "exceptOnBiome" in inland.group(1): errors.append("inland rivers must use one legal onlyOnLand filter")
-    veg=re.search(r"vegetationFilter\s*=\s*(wp\.createFilter\(\).*?\.go\(\))",executable,re.S)
-    if not veg or ".onlyOnLand()" not in veg.group(1) or ".exceptOnLayer(" not in veg.group(1): errors.append("vegetation must use legal land-plus-river-layer filter")
+    if 'XenoVegetation.configureExport(world)' not in executable:
+        errors.append("controlled export settings must be applied")
     if re.search(r"exceptOnBiome\s*\(\s*(?:0|24|10)\s*\)",executable): errors.append("old repeated ocean-biome exclusions are forbidden")
     for alias,canonical in PROFILE_ALIASES.items():
         if not re.search(rf'var\s+PROFILE_ALIASES\s*=\s*\{{[^}}]*{alias}\s*:\s*["\']{canonical}["\']', executable): errors.append(f"profile alias {alias} must resolve to {canonical}")
@@ -161,7 +154,7 @@ def validate(root:Path)->list[str]:
     if value(original_source,"applicationResize")!="100": errors.append("processed inputs must be applied at 100% with no second resize")
     if "loadProcessedTerrain(config)" not in executable or "verifyTerrainFingerprint" not in executable:
         errors.append("processed terrain contract and fingerprints are required")
-    for asset in ("height","biome","terrain","water","ice"):
+    for asset in ("height","biome","terrain","water","ice","trees","plants"):
         if f'processedAssetPath(terrain,"{asset}")' not in executable:
             errors.append(f"processed {asset} must be the authoritative generation input")
     if re.search(r"\.scale\(resize\)|deepenOceanBitmapInPlace|oceanDepthMultiplier",executable):
@@ -169,6 +162,18 @@ def validate(root:Path)->list[str]:
     ice=re.search(r"wp\.applyHeightMap\(iceMask\)(.*?)\.toLevel\(10\)",executable,re.S)
     if not ice or ".withFilter(api.oceanRiverMaskOverlapFilter)" not in ice[1]:
         errors.append("ice must not assign Frozen Ocean to land")
+    try:
+        cfg=json.loads((root/'vegetation.json').read_text(encoding='utf-8'))
+        assigned=[b for p in cfg['profiles'] for b in p['biomes']]
+        if len(assigned)!=len(set(assigned)) or set(assigned)!=ALLOWED_1710_BIOMES:
+            errors.append('vegetation profiles must cover each approved biome exactly once')
+        code=compact_source((root/'world_xenofactions_vegetation.js').read_text(encoding='utf-8'))
+        for required in ('dimension.setPopulate(false)','withMakeAllLeavesPersistent(false)',
+                         'importer.setMinecraftSeed(cfg.seed)','Factory.createNoiseTileFactory(cfg.seed',
+                         'WPObject.LEAF_DECAY_NO_CHANGE','entry[1]===4','layer.setOnlyOnValidBlocks(true)'):
+            if required not in code: errors.append('missing native vegetation contract: '+required)
+    except (OSError,ValueError,KeyError) as exc:
+        errors.append('invalid vegetation contract: '+str(exc))
     for filename,profile_name in LAUNCHERS.items():
         path=root/filename
         if not path.is_file(): continue

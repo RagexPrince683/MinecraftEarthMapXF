@@ -33,7 +33,8 @@ class FilterParserTests(unittest.TestCase):
 class SourceTests(unittest.TestCase):
     def fixture(self,mutate=None):
         root=Path(__file__).resolve().parents[1]; temp=tempfile.TemporaryDirectory(); copy=Path(temp.name)
-        for name in ("README.md","LICENSE","world.js","world_xenofactions.js","world_xenofactions_core.js","world_xenofactions_1_8000.js","world_xenofactions_1_4000.js","world_xenofactions_1_2000.js","xenoearth-profile.json"):
+        for name in ("README.md","LICENSE","world.js","world_xenofactions.js","world_xenofactions_core.js","world_xenofactions_vegetation.js","vegetation.json","world_xenofactions_1_8000.js","world_xenofactions_1_4000.js","world_xenofactions_1_2000.js","xenoearth-profile.json","tools/vegetation.py"):
+            (copy/name).parent.mkdir(parents=True,exist_ok=True)
             if name == "world_xenofactions_core.js":
                 (copy/name).write_text(validator.compact_source((root/name).read_text(encoding="utf-8")),encoding="utf-8")
             else:
@@ -51,7 +52,7 @@ class SourceTests(unittest.TestCase):
         finally: temp.cleanup()
     def test_repository_passes(self): self.assertEqual(validator.validate(Path(__file__).resolve().parents[1]),[])
     def test_rejects_string_map_format(self):
-        errors=self.mutation_errors(r"\.withMapFormat\(api\.mapFormat\)",".withMapFormat(LEGACY_ANVIL_MAP_FORMAT)")
+        errors=self.mutation_errors(r"XenoVegetation.importWorld\(heightMap,api.mapFormat,", "XenoVegetation.importWorld(heightMap,LEGACY_ANVIL_MAP_FORMAT,")
         self.assertTrue(any("must not receive" in e for e in errors))
     def test_rejects_windows_path(self):
         errors=self.mutation_errors(r"var sourceRoot=new java\.io\.File\(scriptDir\);",'var sourceRoot=new java.io.File("C:/Users/example/Downloads/map");')
@@ -91,12 +92,12 @@ class SourceTests(unittest.TestCase):
         for name in ("Deciduous","Pine","Jungle","Swamp","Frost"):
             with self.subTest(name=name):
                 self.assertEqual(validator.validate_with_name_arguments(f'wp.getLayer().withName("{name}").go();'),[])
-    def test_unknown_vegetation_rule_key_fails(self):
-        errors=self.mutation_errors(r'\["swamp",\[\[90,120,220\]\]\]', '["bog",[[90,120,220]]]')
-        self.assertTrue(any("unknown vegetation layer key in rule: bog" in error for error in errors))
-    def test_rejects_positional_vegetation_regression(self):
-        errors=self.mutation_errors(r'\["deciduous",\[\[0,255,255\]', '[0,[[0,255,255]')
-        self.assertTrue(any("positional vegetation" in error or "semantic vegetation" in error for error in errors))
+    def test_native_vegetation_preflight_is_required(self):
+        errors=self.mutation_errors(r'XenoVegetation.build\(vegetation\)', '[]')
+        self.assertTrue(any("native vegetation layers" in error for error in errors))
+    def test_controlled_export_is_required(self):
+        errors=self.mutation_errors(r'XenoVegetation.configureExport\(world\);', '')
+        self.assertTrue(any("controlled export settings" in error for error in errors))
 
     def test_preview_aliases_canonical_earth4000(self):
         source=validator.compact_source((Path(__file__).resolve().parents[1]/"world_xenofactions_core.js").read_text())

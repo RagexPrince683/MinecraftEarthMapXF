@@ -14,8 +14,9 @@ dimensions, resolves legacy Anvil and layers, and constructs filters. Generation
 then imports height, assigns climate, assigns GlobCover terrain, classifies
 oceans, applies rivers, ice and vegetation, and saves a `.world` plus manifest.
 It does not export Minecraft chunks. Declared `groundMaterialMode`,
-`vegetationSeed` and custom-terrain compatibility registry do not drive the
-current generation path. Vegetation density and slope filters do.
+`vegetationSeed` and custom-terrain compatibility registry did not drive that
+generation path. Vegetation density and slope filters did. The current vegetation
+architecture is described at the end of this document.
 
 ### Assets, coordinates and interpolation
 
@@ -255,3 +256,69 @@ continental shelves, Mariana, Himalaya, Andes, Alps and Rockies. The taller
 relief intentionally changes slopes; existing vegetation slope rejection can
 therefore apply more often. Inspect roads/buildability separately before tuning
 the explicit curves or cleanup sizes for a server's preferred terrain style.
+
+## Current export-time vegetation architecture
+
+`vegetation.json` owns semantic biome profiles, species mixes, placement controls,
+seed and tree variants. `tools/vegetation.py` derives two indexed byte masks on
+the final terrain grid. Tree-mask values select a particular species/height;
+plant-mask values select a profile. Geometry and land ownership do not change.
+The native WorldPainter adapter is `world_xenofactions_vegetation.js`.
+
+The adapter uses `HeightMapImporter` with the same height transform and range as
+the previous scripting builder, but with a seeded tile factory. The scripting
+builder's `ImportHeightMapOp` creates a new random tile-factory seed each time;
+setting just the Minecraft seed cannot seed vegetation export. Legacy themes and
+default forest settings are cleared so they cannot reintroduce the old path.
+Population, default resources/caves/caverns/chasms, structure generation and
+global leaf persistence are disabled at the project/export boundary.
+
+Trees are native `Bo2Layer` objects constructed from in-memory BO2 data; no region
+postprocessor or server leaf-decay patch is installed. Each layer has one fixed
+`Bo2Object` provider. The mutable `Bo2ObjectTube` provider is avoided because
+native region exporters share its seeded random state; species and sizes are
+selected in coordinate hashes before export. Objects are embedded in the saved
+project and do not need external schematic files. Plants use native `PlantLayer`
+exporters with valid-foundation checks and no farmland creation. WorldPainter
+2.27's `PlantSettings` fields lack public setters, so field access is confined to
+layer construction in this version-specific adapter.
+
+Existing Cities/street rasters suppress vegetation without enabling those
+objects. Max pooling preserves thin mask features at reduced scales; a bounded
+buffer prevents nearby foliage covering them. Water/ice, substrate, coastal and
+tree-slope gates plus elevation falloff use prepared terrain data. Both masks,
+their configuration/code and any infrastructure inputs are fingerprinted.
+
+### Legacy foliage contract
+
+Minecraft 1.7.10 leaves use block 18 (oak/spruce/birch/jungle species 0/1/2/3) and
+161 (acacia/dark oak species 0/1). Low metadata bits `0x3` encode species; `0x4`
+is the persistent/player-placed flag; `0x8` requests a decay check. Generated
+objects preserve species, clear `0x4`, and set `0x8`. A successful in-game support
+check clears `0x8`; breaking logs/leaves can set it again. Clearing the check bit
+alone only postpones checking and cannot repair unsupported tree geometry.
+
+Logs are block 17 with species 0/1/2/3 or 162 with species 0/1. Axis bits `0xC`
+encode vertical/X/Z/all-bark orientations as 0/4/8/12; orientation does not remove
+their leaf-support ability. Forge uses `canSustainLeaves` and `isLeaves` hooks.
+The legacy game propagates support through **six face neighbours for four
+steps**, not diagonal adjacency or the modern seven-block leaf-distance model.
+Every generated tree definition is checked against that graph before export;
+the Anvil scanner checks the actual exported graph and corresponding species.
+
+WorldPainter's legacy
+[postprocessor](https://github.com/Captain-Chaos/WorldPainter/blob/v2.27.0/WorldPainter/WPCore/src/main/java/org/pepsoft/worldpainter/platforms/Java1_2PostProcessor.java)
+implements global persistence by OR-ing `0x4`. Its
+[block properties calculator](https://github.com/Captain-Chaos/WorldPainter/blob/v2.27.0/WorldPainter/WPCore/src/main/java/org/pepsoft/worldpainter/exporting/BlockPropertiesCalculator.java)
+requires the modern `LEAF_DISTANCES` platform capability to calculate/remove
+floating leaves; that pass does not repair legacy Anvil tree support. Native
+forest generators probabilistically place canopy blocks and provide no legacy
+four-step support validation. Enabling persistence suppresses decay even after
+log removal, rather than fixing the support graph.
+
+Forge's original
+[leaf patch](https://github.com/MinecraftForge/MinecraftForge/blob/1.7.10/patches/minecraft/net/minecraft/block/BlockLeaves.java.patch)
+and [log patch](https://github.com/MinecraftForge/MinecraftForge/blob/1.7.10/patches/minecraft/net/minecraft/block/BlockLog.java.patch)
+preserve natural leaf checks and log-break invalidation. Historical failing saves
+and the owner's modpack are not present here, so this source model does not
+attribute every previously lost leaf to one demonstrated runtime cause.

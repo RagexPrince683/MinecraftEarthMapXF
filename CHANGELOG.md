@@ -65,3 +65,17 @@
   while retaining the ice/Frost footprint and existing vegetation/export rules.
 * Added elevation, component, isolation and topology diagnostics; updated setup
   documentation and existing source checks for the preprocessing contract.
+
+## 2026-10-07 22:36 — Deterministic natural Earth vegetation
+
+* Added centralized biome vegetation profiles, deterministic tree/ground-cover
+  masks, restrained density controls, elevation falloff, substrate/water/ice/slope
+  restrictions, coast clearance, and suppression using existing city/road masks.
+* Replaced shared built-in forest painting with native WorldPainter object and
+  Plants layers. Trees use legacy species-correct logs and natural leaves with
+  verified four-step support paths; no global permanent-leaf workaround is used.
+* Pinned the native import/export seed, disabled population and default resources,
+  and kept generated structures and unwanted terrain generators disabled.
+* Extended prepared-input fingerprints and added a representative export command
+  and read-only legacy Anvil vegetation scanner. Updated configuration/export
+  documentation while preserving the existing Earth grid and terrain curves.

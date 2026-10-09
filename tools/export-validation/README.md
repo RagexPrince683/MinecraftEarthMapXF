@@ -1,8 +1,47 @@
 # Phase 2: exported Anvil validation
 
-Phase 1 validates source configuration only. Before any exported world is opened
-by Forge 1.7.10, Phase 2 must implement a real region/NBT scanner. A filename or
-directory-presence check is not an exported-world validator.
+## Vegetation sample scan
+
+Run `python tools/vegetation.py --sample`, then
+`wpscript world_xenofactions_vegetation_sample.js`. The sample uses the production
+seeded importer, tree objects, Plants layers and placement masks, with one band
+for each vegetation profile. It exports directly as legacy Anvil without Populate.
+
+```bash
+python tools/export-validation/vegetation_scan.py generated/vegetation-sample/export/XenoEarthVegetationSample --size 1664 128
+```
+
+`vegetation_scan.py` reads actual region headers, compression and NBT, including
+legacy Blocks/Data/Add arrays. It checks chunk footprints/population flags,
+unsupported IDs, ores/lava, entities, natural leaf persistence/species, and
+six-face leaf paths of at most four steps to valid logs. It also checks matching
+leaf/log species paths and reports the block-data fingerprint for comparing
+repeated exports. This scanner is intended for small, complete selections;
+its memory use scales with the export. A cut-off selection may correctly report
+unsupported leaves whose supporting logs were outside the exported area.
+
+The optional `--builtinReference` argument to the sample WorldPainter script
+exports the previous built-in forest approach at intensity 3 to
+`XenoEarthVegetationReference`. It is diagnostic only and is never used by the
+Earth-map launchers. It does not reproduce an owner's old save or modpack.
+
+Final owner checks in 1.7.10:
+
+1. Load the export without vanilla population adding terrain features.
+2. Confirm vegetation is present immediately.
+3. Leave intact trees loaded and confirm their foliage stays supported.
+4. Remove all supporting trunk/branch logs and confirm unsupported foliage decays.
+5. Check Earth-scale density and road/city/coast clearance.
+
+Log removal can leave supported foliage while branch logs or neighbouring trees
+still exist. The game checks leaves on random ticks with surrounding chunks
+loaded; a successful static scan does not demonstrate the runtime decay timing.
+
+## Full terrain acceptance (separate work)
+
+The vegetation scanner is not the complete terrain validator below. Full Earth
+acceptance still requires these checks; a filename or directory-presence check
+is not an exported-world validator.
 
 The scanner must read every `region/r.<x>.<z>.mca` 8 KiB header, validate each
 location/timestamp entry and sector range, decompress chunk payloads according to

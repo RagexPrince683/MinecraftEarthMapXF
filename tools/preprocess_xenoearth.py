@@ -21,6 +21,7 @@ from PIL import Image
 from scipy import ndimage as ndi
 
 from validate_xenoearth_source import PROFILES, PROFILE_ALIASES, required_images
+import vegetation
 
 Image.MAX_IMAGE_PIXELS = None  # Only dimension-checked repository rasters are read.
 CONNECTIVITY = np.ones((3, 3), dtype=np.uint8)
@@ -485,6 +486,13 @@ def prepare(root, profile, census_requested=False):
     manifest_path.unlink(missing_ok=True)  # Publish the new complete bundle last.
     input_paths = [root / rel for rel in required_images(scale)]
     input_paths += [root / 'world_xenofactions_core.js', root / 'terrain-processing.json', Path(__file__).resolve(), root / 'tools/validate_xenoearth_source.py']
+    vegetation_cfg = vegetation.configuration(root)
+    if set(ids) - {b for p in vegetation_cfg['profiles'] for b in p['biomes']}:
+        raise ValueError('every mapped climate biome needs a vegetation profile')
+    input_paths += [root / 'vegetation.json', root / 'world_xenofactions_vegetation.js', root / 'tools/vegetation.py']
+    infrastructure_paths = ([root / f'images/{name}{scale}k.png' for name in ('Cities', 'street')]
+                            if vegetation_cfg['suppressInfrastructureMasks'] else [])
+    input_paths += infrastructure_paths
     sources = [fingerprint(root, path) for path in input_paths]
     counters = Counter()
     with tempfile.TemporaryDirectory(prefix='work-', dir=output) as directory, ExitStack() as handles:
@@ -496,6 +504,18 @@ def prepare(root, profile, census_requested=False):
         water = working_array(work, handles, 'source-water', shape)
         ice = working_array(work, handles, 'ice', shape)
         cover_water = working_array(work, handles, 'cover-water', shape)
+        infrastructure = working_array(work, handles, 'vegetation-infrastructure', shape)
+        infrastructure[:] = 0
+        # Original masks use black=off, positive red-channel values=on.
+        # Max-pool instead of point sampling so thin roads survive smaller exports.
+        for path in infrastructure_paths:
+            with checked_image(path, dimensions) as image:
+                for target, window, center in tiles(shape, cfg['tileSize'], 0):
+                    ys, xs = target
+                    patch = image.crop((xs.start*step, ys.start*step, xs.stop*step, ys.stop*step)).convert('RGB')
+                    data = np.asarray(patch)[:, :, 0] > 0
+                    data = data.reshape(ys.stop-ys.start, step, xs.stop-xs.start, step).any(axis=(1,3))
+                    infrastructure[target] |= data
         print(f'[{profile}] Decode native sources onto unchanged {width} x {height} grid', flush=True)
         histogram = ingest_height(root / f'images/HeightMap{scale}k.png', dimensions, raw, ocean, step)
         ingest_categories(root / f'images/BiomeMap{scale}k.png', dimensions, climate, step, decode_climate)
@@ -659,8 +679,13 @@ def prepare(root, profile, census_requested=False):
             report['globalComponents'] = {}
             for key, a, b, binary in (('biome', climate, final_climate, False), ('surface', cover, final_cover, False), ('water', water, cleaned_water, True)):
                 report['globalComponents'][key] = {'before': component_census(a, ocean, binary), 'after': component_census(b, ocean, binary)}
+        print(f'[{profile}] Deterministic vegetation masks', flush=True)
+        trees, plants, vegetation_counts = vegetation.prepare(
+            root, vegetation_cfg, (final_height, final_climate, final_cover, ocean, cleaned_water, ice, infrastructure),
+            ids, shape, cfg['tileSize'], output, work, handles, tiles, working_array)
+        report['vegetation'] = {'configuration': vegetation_cfg, **vegetation_counts}
         assets = {}
-        for name, array, palette in (('height', final_height, None), ('biome', final_climate, colors), ('terrain', final_cover, None), ('water', cleaned_water, None), ('ice', ice, None)):
+        for name, array, palette in (('height', final_height, None), ('biome', final_climate, colors), ('terrain', final_cover, None), ('water', cleaned_water, None), ('ice', ice, None), ('trees', trees, None), ('plants', plants, None)):
             target = output / (name + '.png')
             save_png(target, array, palette)
             assets[name] = fingerprint(root, target)
